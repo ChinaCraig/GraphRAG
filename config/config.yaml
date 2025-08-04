@@ -1,0 +1,27 @@
+# 项目主配置文件
+# 包含项目全局配置信息
+
+# 文件保存目录配置
+upload:
+  base_path: ./upload
+  json_path: ./upload/json
+  pdf_path: ./upload/pdf
+  word_path: ./upload/word
+  excel_path: ./upload/excel
+  ppt_path: ./upload/ppt
+  img_path: ./upload/img
+  md_path: ./upload/md
+  txt_path: ./upload/txt
+
+# Flask应用配置
+app:
+  host: 0.0.0.0
+  port: 5000
+  debug: True
+  secret_key: your-secret-key-here
+
+# 日志配置
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  file: ./logs/app.log 

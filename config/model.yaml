@@ -1,0 +1,26 @@
+# 模型配置文件
+# 包含项目全局用到的所有模型配置
+
+# DeepSeek大语言模型配置
+deepseek:
+  api_url: https://api.deepseek.com
+  api_key: sk-27e712e3a6c64533884adc0ad040ff3b
+  model_name: deepseek-chat
+  # API请求配置
+  timeout: 60
+  max_tokens: 4096
+  temperature: 0.7
+  # 重试配置
+  max_retries: 3
+  retry_delay: 1
+
+# 嵌入模型配置
+embedding:
+  model_name: paraphrase-multilingual-mpnet-base-v2
+  dimension: 768
+  # 模型路径配置
+  model_path: ./models/paraphrase-multilingual-mpnet-base-v2
+  # 推理配置
+  device: cpu
+  batch_size: 32
+  max_length: 512 
