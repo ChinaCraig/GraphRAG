@@ -62,8 +62,14 @@ cd GraphRAG
 
 ### 2. 安装依赖
 
+#### 方法1: 一键安装（推荐）
 ```bash
-pip install -r requirements.txt
+python3 install_dependencies.py
+```
+
+#### 方法2: 手动安装
+```bash
+pip3 install -r requirements.txt
 ```
 
 ### 3. 配置数据库
@@ -105,10 +111,22 @@ mysql -h 192.168.16.26 -u root -p < install/db.sql
 python install/download_embedding_model.py
 ```
 
-### 6. 启动应用
+### 6. 测试PDF提取功能
+
+#### 快速测试（推荐）
+```bash
+python3 test_simple_fast.py
+```
+
+#### 基础测试
+```bash
+python3 test_simple.py
+```
+
+### 7. 启动应用
 
 ```bash
-python app.py
+python3 app.py
 ```
 
 应用将在 `http://localhost:5000` 启动。
