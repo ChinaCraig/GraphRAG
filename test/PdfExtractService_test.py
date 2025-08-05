@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-PDF内容提取服务测试脚本
-基于unstructured库的PDF文档结构化内容提取测试
+AI核心PDF内容提取服务测试脚本
+基于精简化JSON结构的PDF文档结构化内容提取测试
 """
 
 import sys
@@ -16,8 +16,8 @@ sys.path.insert(0, str(project_root))
 from app.service.pdf.PdfExtractService import extract_pdf_content
 
 
-def test_pdf_extraction():
-    """测试PDF内容提取功能"""
+def test_ai_core_pdf_extraction():
+    """测试AI核心PDF内容提取功能"""
     # 测试文件路径（请替换为实际的PDF文件路径）
     test_files = [
         "/Users/craig-mac/Downloads/多宁产品手册/20240906-CHO试剂盒单页.pdf",
@@ -26,75 +26,117 @@ def test_pdf_extraction():
     
     for pdf_path in test_files:
         if not os.path.exists(pdf_path):
-            print(f"测试文件不存在，跳过: {pdf_path}")
+            print(f"⚠️  测试文件不存在，跳过: {pdf_path}")
             continue
             
         print(f"\n{'='*60}")
-        print(f"正在测试PDF文件: {pdf_path}")
+        print(f"🔍 正在测试PDF文件: {pdf_path}")
         print(f"{'='*60}")
         
         try:
-            # 执行PDF内容提取
+            # 执行AI核心PDF内容提取
             result = extract_pdf_content(pdf_path)
             
-            # 打印文档基本信息
-            doc_metadata = result['document_metadata']
-            print(f"文档信息:")
-            print(f"  - 文件名: {doc_metadata['file_name']}")
-            print(f"  - 文件大小: {doc_metadata['file_size']} 字节")
-            print(f"  - 文件哈希: {doc_metadata['file_hash'][:8]}...")
+            # 验证新的JSON结构
+            if 'document_info' not in result or 'elements' not in result:
+                print(f"❌ JSON结构错误: 缺少必需的顶级字段")
+                continue
             
-            # 打印内容摘要
-            content_summary = result['content_summary']
-            print(f"\n内容摘要:")
-            print(f"  - 总字符数: {content_summary['total_characters']}")
-            print(f"  - 总页数: {content_summary['total_pages']}")
-            print(f"  - 页面范围: {content_summary['page_range']}")
-            print(f"  - 包含表格: {'是' if content_summary['has_tables'] else '否'}")
-            print(f"  - 包含图片: {'是' if content_summary['has_images'] else '否'}")
-            print(f"  - 内容密度: {content_summary['content_density']:.2f} 字符/元素")
+            # 打印文档核心信息
+            doc_info = result['document_info']
+            print(f"📄 文档核心信息:")
+            print(f"  - 文件名: {doc_info['file_name']}")
+            print(f"  - 文档哈希: {doc_info['file_hash'][:16]}...")
+            print(f"  - 总页数: {doc_info['total_pages']}")
             
-            # 打印元素类型分布
-            print(f"\n元素类型分布:")
-            for element_type, count in content_summary['element_distribution'].items():
-                print(f"  - {element_type}: {count}个")
+            # 分析AI核心元素
+            elements = result['elements']
+            print(f"\n🎯 AI核心元素分析:")
+            print(f"  - 有效元素数: {len(elements)}")
             
-            # 打印标题层次结构
-            if content_summary['title_hierarchy']:
-                print(f"\n标题层次结构:")
-                for i, title in enumerate(content_summary['title_hierarchy'][:5], 1):
-                    print(f"  {i}. {title[:50]}{'...' if len(title) > 50 else ''}")
+            # 统计各字段完整性
+            vectorization_count = sum(1 for elem in elements if elem.get('vectorization_text'))
+            coordinates_count = sum(1 for elem in elements if elem.get('coordinates'))
+            context_count = sum(1 for elem in elements if elem.get('context_info'))
             
-            # 打印提取元数据
-            extraction_metadata = result['extraction_metadata']
-            print(f"\n提取元数据:")
-            print(f"  - 提取时间: {extraction_metadata['extraction_time']}")
-            print(f"  - 总元素数: {extraction_metadata['total_elements']}")
-            print(f"  - 处理策略: {extraction_metadata['processing_strategy']}")
-            print(f"  - 支持语言: {extraction_metadata['languages_detected']}")
+            print(f"  - 可向量化元素: {vectorization_count}/{len(elements)} ({vectorization_count/len(elements)*100:.1f}%)")
+            print(f"  - 包含坐标元素: {coordinates_count}/{len(elements)} ({coordinates_count/len(elements)*100:.1f}%)")
+            print(f"  - 包含上下文元素: {context_count}/{len(elements)} ({context_count/len(elements)*100:.1f}%)")
             
-            # 展示前几个结构化元素的示例
-            print(f"\n结构化内容示例:")
-            structured_content = result['structured_content']
-            for i, element in enumerate(structured_content[:3], 1):
+            # 分析页面分布
+            page_distribution = {}
+            for elem in elements:
+                page = elem.get('page_number')
+                if page is None:
+                    page = 'Unknown'
+                page_distribution[page] = page_distribution.get(page, 0) + 1
+            
+            print(f"\n📊 页面分布:")
+            # 将Unknown放到最后，数字页面按顺序排列
+            sorted_pages = []
+            unknown_count = 0
+            for page, count in page_distribution.items():
+                if page == 'Unknown':
+                    unknown_count = count
+                else:
+                    sorted_pages.append((page, count))
+            
+            # 按页码排序
+            sorted_pages.sort(key=lambda x: x[0])
+            
+            for page, count in sorted_pages:
+                print(f"  - 第{page}页: {count}个元素")
+            if unknown_count > 0:
+                print(f"  - 未知页面: {unknown_count}个元素")
+            
+            # 分析元素类型（通过context_info）
+            type_distribution = {}
+            for elem in elements:
+                context = elem.get('context_info', {})
+                elem_type = context.get('type_context', {}).get('element_type', 'Unknown')
+                type_distribution[elem_type] = type_distribution.get(elem_type, 0) + 1
+            
+            print(f"\n🏷️  元素类型分布:")
+            for elem_type, count in type_distribution.items():
+                print(f"  - {elem_type}: {count}个")
+            
+            # 展示AI核心元素示例
+            print(f"\n🎯 AI核心元素示例:")
+            for i, element in enumerate(elements[:3], 1):
                 print(f"  元素{i}:")
                 print(f"    - ID: {element['element_id']}")
-                print(f"    - 类型: {element['element_type_cn']}")
-                print(f"    - 页码: {element.get('page_number', '未知')}")
-                print(f"    - 内容: {element['text_content'][:80]}{'...' if len(element['text_content']) > 80 else ''}")
-                if element.get('is_table'):
-                    print(f"    - [表格元素]")
-                if element.get('is_image'):
-                    print(f"    - [图片元素]")
+                print(f"    - 页码: {element.get('page_number', 'N/A')}")
+                print(f"    - 向量化文本: {element['vectorization_text'][:60]}...")
+                print(f"    - 原始文本: {element['text_content'][:40]}...")
+                
+                # 显示上下文信息
+                context = element.get('context_info', {})
+                if context:
+                    pos_info = context.get('position_in_document', {})
+                    type_info = context.get('type_context', {})
+                    print(f"    - 文档位置: 索引{pos_info.get('index', 'N/A')}, 相对位置{pos_info.get('relative_position', 0):.2f}")
+                    print(f"    - 元素类型: {type_info.get('element_type', 'N/A')}")
                 print()
             
-            # 保存结果到文件
-            output_file = f"{pdf_path}_extracted.json"
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-            print(f"提取结果已保存到: {output_file}")
+            # 检查是否自动保存了JSON
+            if result.get('saved_json_path'):
+                saved_path = result['saved_json_path']
+                try:
+                    file_size = os.path.getsize(saved_path)
+                    print(f"💾 自动保存信息:")
+                    print(f"  - 保存路径: {saved_path}")
+                    print(f"  - 文件大小: {file_size:,} 字节")
+                except:
+                    print(f"💾 文件已自动保存到: {saved_path}")
+            else:
+                # 手动保存结果到文件（兼容旧方式）
+                output_file = f"{pdf_path}_ai_core_extracted.json"
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                print(f"💾 手动保存结果到: {output_file}")
             
-            print(f"✅ PDF提取成功!")
+            print(f"\n✅ AI核心PDF提取成功!")
+            print(f"🎉 JSON结构验证通过，符合AI核心功能要求!")
             
         except Exception as e:
             print(f"❌ PDF提取失败: {str(e)}")
@@ -112,13 +154,13 @@ def create_sample_test_structure():
 
 
 if __name__ == "__main__":
-    print("PDF内容提取服务测试")
-    print("=" * 40)
+    print("🎯 AI核心PDF内容提取服务测试")
+    print("=" * 50)
     
     # 创建测试目录结构
     create_sample_test_structure()
     
-    # 运行测试
-    test_pdf_extraction()
+    # 运行AI核心提取测试
+    test_ai_core_pdf_extraction()
     
-    print("\n测试完成!")
+    print("\n🎉 测试完成!")

@@ -91,21 +91,17 @@ class PdfExtractService:
             # 处理和结构化元素
             structured_elements = self._process_elements(elements)
             
-            # 生成最终的JSON结构
+            # 生成精简的AI核心JSON结构
             result = {
-                "document_metadata": doc_metadata,
-                "content_summary": self._generate_content_summary(structured_elements),
-                "structured_content": structured_elements,
-                "extraction_metadata": {
-                    "extraction_time": datetime.now().isoformat(),
-                    "total_elements": len(structured_elements),
-                    "element_type_counts": self._count_element_types(structured_elements),
-                    "processing_strategy": "hi_res",
-                    "languages_detected": self.supported_languages
-                }
+                "document_info": {
+                    "file_hash": doc_metadata["file_hash"],
+                    "file_name": doc_metadata["file_name"],
+                    "total_pages": self._get_total_pages(structured_elements)
+                },
+                "elements": self._generate_ai_core_elements(structured_elements)
             }
             
-            logger.info(f"PDF处理完成，提取了 {len(structured_elements)} 个元素")
+            logger.info(f"PDF处理完成，提取了 {len(result['elements'])} 个有效AI核心元素")
             
             # 保存JSON文件到配置的目录
             saved_path = self._save_json_result(result, pdf_file_path)
@@ -146,6 +142,51 @@ class PdfExtractService:
             "file_extension": file_path.suffix.lower()
         }
     
+    def _generate_ai_core_elements(self, structured_elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        生成AI核心功能所需的精简元素列表
+        
+        Args:
+            structured_elements (List[Dict[str, Any]]): 完整的结构化元素列表
+            
+        Returns:
+            List[Dict[str, Any]]: AI核心字段的精简元素列表
+        """
+        ai_core_elements = []
+        
+        for element in structured_elements:
+            # 只保留AI核心功能必需的字段
+            core_element = {
+                "element_id": element.get("element_id"),
+                "vectorization_text": element.get("vectorization_text"),
+                "text_content": element.get("text_content"),
+                "page_number": element.get("page_number"),
+                "coordinates": element.get("coordinates"),
+                "context_info": element.get("context_info")
+            }
+            
+            # 过滤掉None值和空字符串的元素
+            if core_element["text_content"] or core_element["vectorization_text"]:
+                ai_core_elements.append(core_element)
+        
+        return ai_core_elements
+    
+    def _get_total_pages(self, structured_elements: List[Dict[str, Any]]) -> int:
+        """
+        获取文档总页数
+        
+        Args:
+            structured_elements (List[Dict[str, Any]]): 结构化元素列表
+            
+        Returns:
+            int: 文档总页数
+        """
+        pages = set()
+        for element in structured_elements:
+            if element.get("page_number"):
+                pages.add(element["page_number"])
+        return len(pages) if pages else 0
+
     def _process_elements(self, elements: List) -> List[Dict[str, Any]]:
         """
         处理和结构化提取的元素
@@ -331,59 +372,6 @@ class PdfExtractService:
         
         return context_info
     
-    def _generate_content_summary(self, structured_elements: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        生成内容摘要信息
-        
-        Args:
-            structured_elements (List[Dict[str, Any]]): 结构化元素列表
-            
-        Returns:
-            Dict[str, Any]: 内容摘要
-        """
-        # 统计各类型元素
-        type_counts = self._count_element_types(structured_elements)
-        
-        # 提取标题信息
-        titles = [elem for elem in structured_elements if "Title" in elem.get("element_type", "")]
-        title_hierarchy = [elem["text_content"] for elem in titles[:10]]  # 前10个标题
-        
-        # 计算总字符数
-        total_chars = sum(elem.get("text_length", 0) for elem in structured_elements)
-        
-        # 页面信息
-        pages = set()
-        for elem in structured_elements:
-            if elem.get("page_number"):
-                pages.add(elem["page_number"])
-        
-        return {
-            "total_characters": total_chars,
-            "total_pages": len(pages) if pages else 0,
-            "page_range": f"{min(pages)}-{max(pages)}" if pages else "未知",
-            "title_hierarchy": title_hierarchy,
-            "element_distribution": type_counts,
-            "has_tables": type_counts.get("表格", 0) > 0,
-            "has_images": type_counts.get("图片", 0) > 0,
-            "content_density": total_chars / len(structured_elements) if structured_elements else 0
-        }
-    
-    def _count_element_types(self, structured_elements: List[Dict[str, Any]]) -> Dict[str, int]:
-        """
-        统计各类型元素的数量
-        
-        Args:
-            structured_elements (List[Dict[str, Any]]): 结构化元素列表
-            
-        Returns:
-            Dict[str, int]: 各类型元素的数量统计
-        """
-        type_counts = {}
-        for element in structured_elements:
-            element_type_cn = element.get("element_type_cn", "未知类型")
-            type_counts[element_type_cn] = type_counts.get(element_type_cn, 0) + 1
-        return type_counts
-    
     def _load_config(self) -> Dict[str, Any]:
         """
         加载项目配置文件
@@ -468,18 +456,24 @@ if __name__ == "__main__":
         test_pdf_path = sys.argv[1]
         try:
             result = extract_pdf_content(test_pdf_path)
-            print("提取成功!")
-            print(f"文档名称: {result['document_metadata']['file_name']}")
-            print(f"总元素数: {result['extraction_metadata']['total_elements']}")
-            print(f"元素类型分布: {result['extraction_metadata']['element_type_counts']}")
+            print("✅ AI核心PDF提取成功!")
+            print(f"📄 文档名称: {result['document_info']['file_name']}")
+            print(f"📊 有效元素数: {len(result['elements'])}")
+            print(f"📖 总页数: {result['document_info']['total_pages']}")
+            print(f"💾 文档哈希: {result['document_info']['file_hash'][:8]}...")
             
-            # 保存结果到JSON文件
-            output_path = test_pdf_path.replace('.pdf', '_extracted.json')
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-            print(f"结果已保存到: {output_path}")
+            # 显示前3个元素示例
+            print("\n🎯 AI核心元素示例:")
+            for i, elem in enumerate(result['elements'][:3]):
+                print(f"  元素{i+1}:")
+                print(f"    - ID: {elem['element_id']}")
+                print(f"    - 页码: {elem.get('page_number', 'N/A')}")
+                print(f"    - 向量化文本: {elem['vectorization_text'][:50]}...")
+            
+            if result.get('saved_json_path'):
+                print(f"\n💾 JSON已自动保存到: {result['saved_json_path']}")
             
         except Exception as e:
-            print(f"提取失败: {str(e)}")
+            print(f"❌ 提取失败: {str(e)}")
     else:
         print("使用方法: python PdfExtractService.py <pdf_file_path>")
