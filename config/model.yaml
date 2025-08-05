@@ -23,4 +23,30 @@ embedding:
   # 推理配置
   device: cpu
   batch_size: 32
-  max_length: 512 
+  max_length: 512
+
+# PDF处理相关模型配置
+pdf_processing:
+  # OCR模型配置（PaddleOCR）
+  ocr:
+    model_name: paddleocr
+    language: ch                    # 中文识别
+    use_angle_cls: true            # 启用角度分类
+    use_gpu: false                 # 使用GPU加速（根据环境配置）
+    show_log: false                # 显示详细日志
+    
+  # 图像理解模型配置
+  image_understanding:
+    model_name: blip2              # 图像理解模型
+    max_description_length: 500    # 图像描述最大长度
+    compression_quality: 85        # 图像压缩质量
+    
+  # 表格检测模型配置
+  table_detection:
+    model_name: table-transformer  # 表格检测模型
+    max_embed_rows: 50            # 嵌入的最大行数
+    
+  # 布局检测模型配置
+  layout_detection:
+    model_name: yolox             # 布局检测模型（Unstructured使用）
+    strategy: hi_res              # 高分辨率策略 
