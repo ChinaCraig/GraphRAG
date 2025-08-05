@@ -20,7 +20,7 @@ def test_ai_core_pdf_extraction():
     """测试AI核心PDF内容提取功能"""
     # 测试文件路径（请替换为实际的PDF文件路径）
     test_files = [
-        "/Users/craig-mac/Downloads/多宁产品手册/20240906-CHO试剂盒单页.pdf",
+        "/Users/craig-macmini/Downloads/多宁产品手册/20240906-CHO试剂盒单页.pdf",
         # 可以添加更多测试文件路径
     ]
     

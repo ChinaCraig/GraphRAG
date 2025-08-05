@@ -28,21 +28,24 @@
 ### 顶级结构
 提取服务返回的精简JSON包含2个主要节点：
 
+**实际数据案例**（来自真实提取结果）：
 ```json
 {
-  "document_info": {...},    // 文档核心信息
-  "elements": [...]          // AI核心元素数组
+  "document_info": {...},    // 文档核心信息，包含文件标识、名称和页数等元数据
+  "elements": [...]          // AI核心元素数组，包含所有提取的文档元素（文本、标题、表格等）
 }
 ```
 
 ### 1. document_info（文档核心信息）
 **作用**: 提供文档识别和多文档检索所需的最小信息集
 **内容说明**:
+
+**实际数据案例**（来自真实提取结果）：
 ```json
 {
-  "file_hash": "c8a436bf8cfbb3a49da148f6f678afcc", // 文档唯一标识（用于检索去重）
-  "file_name": "20240906-CHO试剂盒单页.pdf",        // 文件名（用于结果展示）
-  "total_pages": 4                                  // 总页数（用于页面过滤）
+  "file_hash": "c8a436bf8cfbb3a49da148f6f678afcc",  // 文档内容的MD5哈希值，作为文档唯一标识符，用于检索去重和缓存管理
+  "file_name": "20240906-CHO试剂盒单页.pdf",         // 原始PDF文件名，用于检索结果展示和用户识别
+  "total_pages": 4                                   // PDF文档总页数，用于页面级别过滤和分页检索
 }
 ```
 
@@ -50,113 +53,46 @@
 **作用**: 存储AI功能所需的核心数据，每个元素包含6个核心字段
 **内容说明**: 数组形式，每个元素包含以下字段：
 
+**实际数据案例**（来自真实提取结果）：
 ```json
 {
-  "element_id": "elem_000000",                      // 🎯 唯一标识符（检索定位）
-  "vectorization_text": "[标题] CHO细胞宿主蛋白检测试剂盒", // 🎯 向量化文本（embedding）
-  "text_content": "CHO细胞宿主蛋白检测试剂盒",          // 🎯 原始文本（实体识别）
-  "page_number": 1,                                 // 🎯 页码（结果定位）
-  "coordinates": {                                  // 🎯 坐标信息（空间关系）
-    "points": [
-      [63.952, 175.198],
-      [63.952, 209.198], 
-      [534.308, 209.198],
-      [534.308, 175.198]
+  "element_id": "elem_000000",                                    // 🎯 元素唯一标识符，用于向量索引和检索定位
+  "vectorization_text": "[标题] CHO细胞宿主蛋白检测试剂盒",         // 🎯 向量化专用文本，带类型标记，直接用于embedding计算
+  "text_content": "CHO细胞宿主蛋白检测试剂盒",                   // 🎯 原始文本内容，用于实体识别和关系提取
+  "page_number": 1,                                              // 🎯 所在页码，用于结果定位和页面级别过滤
+  "coordinates": {                                               // 🎯 元素坐标信息，用于空间关系分析
+    "points": [                                                  // 矩形四个顶点坐标，按顺序连接形成边界框
+      [63.952, 175.19799999999998],                             // 左上角坐标点
+      [63.952, 209.19799999999998],                             // 左下角坐标点  
+      [534.3080000000001, 209.19799999999998],                  // 右下角坐标点
+      [534.3080000000001, 175.19799999999998]                   // 右上角坐标点
     ],
-    "system": "PixelSpace",
-    "layout_width": null,
-    "layout_height": null
+    "system": "<unstructured.documents.coordinates.PixelSpace object at 0x3256f2d50>", // 坐标系统类型，像素空间坐标
+    "layout_width": null,                                        // 布局宽度（当前为空）
+    "layout_height": null                                        // 布局高度（当前为空）
   },
-  "context_info": {                                 // 🎯 上下文信息（关系推理）
-    "position_in_document": {
-      "index": 0,
-      "relative_position": 0.0,
-      "is_beginning": true,
-      "is_middle": false,
-      "is_end": false
+  "context_info": {                                              // 🎯 上下文信息，用于关系推理和内容理解
+    "position_in_document": {                                    // 文档中的位置信息
+      "index": 0,                                                // 在文档中的元素索引，从0开始
+      "relative_position": 0.0,                                  // 相对位置（0.0-1.0），表示在文档中的位置比例
+      "is_beginning": true,                                      // 是否为文档开始部分，用于上下文推理
+      "is_middle": false,                                        // 是否为文档中间部分
+      "is_end": false                                            // 是否为文档结束部分
     },
-    "page_context": {
-      "page_number": 1,
-      "page_position": "第1页"
+    "page_context": {                                            // 页面上下文信息
+      "page_number": 1,                                          // 页码（数字形式）
+      "page_position": "第1页"                                    // 页码（中文描述），用于结果展示
     },
-    "type_context": {
-      "element_type": "Title",
-      "is_title": true,
-      "is_content": false,
-      "is_structured": false
+    "type_context": {                                            // 元素类型上下文
+      "element_type": "Title",                                   // 元素类型，用于内容分类和处理策略
+      "is_title": true,                                          // 是否为标题类型，影响向量化权重
+      "is_content": false,                                       // 是否为正文内容
+      "is_structured": false                                     // 是否为结构化数据（如表格）
     }
   }
 }
 ```
 
-## AI核心功能字段映射
-
-### 🎯 向量化（Embedding）功能
-**直接使用字段：**
-- `vectorization_text` - 直接进行embedding计算
-- `element_id` - 向量索引标识
-
-**使用场景：**
-```python
-def vectorize_elements(elements):
-    for element in elements:
-        vector = embedding_model.encode(element["vectorization_text"])
-        vector_db.add(element["element_id"], vector)
-```
-
-### 🔗 实体关系提取功能  
-**直接使用字段：**
-- `context_info` - 关系推理的核心数据
-- `coordinates` - 空间关系分析
-- `text_content` - 实体识别源文本
-- `element_id` - 图节点标识
-
-**使用场景：**
-```python
-def extract_relationships(elements):
-    for element in elements:
-        entities = ner_model.extract(element["text_content"])
-        spatial_relations = analyze_spatial(element["coordinates"])
-        context_relations = infer_relations(element["context_info"])
-```
-
-### 🔍 知识库检索功能
-**直接使用字段：**
-- `element_id` - 精确定位检索结果
-- `page_number` - 页面级别过滤
-- `file_hash` - 多文档来源区分
-- `vectorization_text` - 结果内容展示
-
-**使用场景：**
-```python
-def retrieve_answer(query):
-    similar_ids = vector_search(query)
-    for element_id in similar_ids:
-        element = get_by_id(element_id)
-        yield {
-            "content": element["vectorization_text"],
-            "location": f"第{element['page_number']}页",
-            "source": get_filename(element["file_hash"])
-        }
-```
-
-## 精简化收益
-
-### 性能提升
-- **文件大小减少**: 约75%存储空间节省
-- **解析速度**: 字段数减少60%，解析更快
-- **内存占用**: 显著降低内存消耗
-
-### 维护简化
-- **核心聚焦**: 只关注AI功能必需字段
-- **调试简化**: 减少非关键字段干扰
-- **扩展清晰**: 新增字段明确AI价值
-
-## 自动保存功能
-- JSON文件自动保存到config.yaml中配置的json_path目录
-- 文件命名格式：`{原PDF文件名}_extracted.json`
-- 支持自动创建目录结构
-- 精简结构显著减少文件大小
 
 
 
