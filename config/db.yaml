@@ -1,42 +1,39 @@
 # 数据库配置文件
-# 包含MySQL、Milvus、Neo4j的配置信息
+# 包含MySQL、Milvus、Neo4j的连接配置信息
 
 # MySQL数据库配置
 mysql:
-  host: 192.168.16.26
-  port: 3306
-  username: root
-  password: !200808Xx
-  database: graph_rag
-  charset: utf8mb4
-  # 连接池配置
-  pool_size: 10
-  max_overflow: 20
-  pool_timeout: 30
-  pool_recycle: 3600
+  host: "192.168.16.26"        # MySQL服务器地址
+  port: 3306                   # MySQL服务器端口
+  username: "root"             # MySQL用户名
+  password: "!200808Xx"        # MySQL密码
+  database: "graph_rag"        # 数据库名称
+  charset: "utf8mb4"           # 字符集
+  pool_size: 10                # 连接池大小
+  max_overflow: 20             # 连接池最大溢出连接数
+  pool_timeout: 30             # 连接池超时时间(秒)
+  pool_recycle: 3600           # 连接回收时间(秒)
+  echo: false                  # 是否打印SQL语句(调试用)
 
 # Milvus向量数据库配置
 milvus:
-  host: 192.168.16.26
-  port: 19530
-  database: graph_rag
-  collection: graph_rag
-  # 向量维度配置
-  dimension: 768
-  # 索引配置
-  index_type: IVFFLAT
-  nlist: 1024
-  # 连接配置
-  timeout: 30
+  host: "192.168.16.26"        # Milvus服务器地址
+  port: 19530                  # Milvus服务器端口
+  database: "graph_rag"        # Milvus数据库名称
+  collection: "graph_rag"      # Milvus集合名称
+  dimension: 768               # 向量维度
+  metric_type: "COSINE"        # 相似度计算方式(COSINE/L2/IP)
+  index_type: "IVF_FLAT"       # 索引类型
+  nlist: 1024                  # 索引参数
+  timeout: 30                  # 连接超时时间(秒)
 
 # Neo4j图数据库配置
 neo4j:
-  host: 192.168.16.26
-  port: 7687
-  username: neo4j
-  password: !200808Xx
-  database: neo4j
-  # 连接配置
-  max_connection_lifetime: 3600
-  max_connection_pool_size: 50
-  connection_timeout: 30 
+  uri: "bolt://192.168.16.26:7687"  # Neo4j连接URI
+  username: "neo4j"                 # Neo4j用户名
+  password: "!200808Xx"            # Neo4j密码
+  database: "neo4j"                # Neo4j数据库名称
+  max_connection_lifetime: 3600     # 连接最大生存时间(秒)
+  max_connection_pool_size: 50      # 连接池最大大小
+  connection_timeout: 30            # 连接超时时间(秒)
+  trust: "TRUST_ALL_CERTIFICATES"   # 证书信任策略

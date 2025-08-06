@@ -1,331 +1,602 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 智能检索服务
+负责基于向量和知识图谱的智能搜索功能
 """
 
 import logging
 import yaml
-from typing import Dict, Any, List
-import sys
-import os
+import json
+import numpy as np
+from typing import Optional, Dict, Any, List, Union
+from datetime import datetime
+import requests
+import re
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+from utils.MySQLManager import MySQLManager
+from utils.MilvusManager import MilvusManager
+from utils.Neo4jManager import Neo4jManager
+from sentence_transformers import SentenceTransformer
 
-from utils.MySQLManager import get_mysql_manager
-from utils.MilvusManager import get_milvus_manager
-
-logger = logging.getLogger(__name__)
 
 class SearchService:
-    def __init__(self, config_path: str = "config/model.yaml"):
-        self.config_path = config_path
-        self.mysql_manager = None
-        self.milvus_manager = None
-        self._load_config()
-        self._init_managers()
+    """智能检索服务类"""
     
-    def _load_config(self):
-        try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-            self.deepseek_config = config.get('deepseek', {})
-            logger.info("智能检索配置加载成功")
-        except Exception as e:
-            logger.error(f"加载智能检索配置失败: {str(e)}")
-            raise
-    
-    def _init_managers(self):
-        try:
-            self.mysql_manager = get_mysql_manager()
-            self.milvus_manager = get_milvus_manager()
-            logger.info("数据库管理器初始化成功")
-        except Exception as e:
-            logger.error(f"初始化数据库管理器失败: {str(e)}")
-            raise
-    
-    def search_query(self, query: str, top_k: int = 10, search_type: str = 'vector', file_type: str = '') -> Dict[str, Any]:
-        try:
-            logger.info(f"开始智能检索: {query}")
-            
-            if search_type == 'vector':
-                results = self._vector_search(query, top_k, file_type)
-            elif search_type == 'keyword':
-                results = self._keyword_search(query, top_k, file_type)
-            elif search_type == 'hybrid':
-                results = self._hybrid_search(query, top_k, file_type)
-            else:
-                results = self._vector_search(query, top_k, file_type)
-            
-            self._save_search_history(query, search_type, len(results))
-            
-            return {
-                'success': True,
-                'message': '智能检索成功',
-                'data': {
-                    'query': query,
-                    'search_type': search_type,
-                    'results': results,
-                    'total': len(results)
-                }
-            }
-        except Exception as e:
-            logger.error(f"智能检索失败: {str(e)}")
-            return {'success': False, 'message': f'智能检索失败: {str(e)}', 'data': None}
-    
-    def semantic_search(self, query: str, top_k: int = 10, threshold: float = 0.5) -> Dict[str, Any]:
-        try:
-            logger.info(f"开始语义搜索: {query}")
-            results = self._vector_search(query, top_k)
-            filtered_results = [r for r in results if r.get('distance', 0) >= threshold]
-            
-            return {
-                'success': True,
-                'message': '语义搜索成功',
-                'data': {
-                    'query': query,
-                    'results': filtered_results,
-                    'total': len(filtered_results),
-                    'threshold': threshold
-                }
-            }
-        except Exception as e:
-            logger.error(f"语义搜索失败: {str(e)}")
-            return {'success': False, 'message': f'语义搜索失败: {str(e)}', 'data': None}
-    
-    def keyword_search(self, keywords: List[str], top_k: int = 10, match_type: str = 'any') -> Dict[str, Any]:
-        try:
-            logger.info(f"开始关键词搜索: {keywords}")
-            
-            if match_type == 'all':
-                where_conditions = []
-                for i, keyword in enumerate(keywords):
-                    where_conditions.append(f"content LIKE %(keyword{i})s")
-                where_clause = " AND ".join(where_conditions)
-                params = {f'keyword{i}': f'%{keyword}%' for i, keyword in enumerate(keywords)}
-            else:
-                where_conditions = []
-                for i, keyword in enumerate(keywords):
-                    where_conditions.append(f"content LIKE %(keyword{i})s")
-                where_clause = " OR ".join(where_conditions)
-                params = {f'keyword{i}': f'%{keyword}%' for i, keyword in enumerate(keywords)}
-            
-            sql = f"""
-            SELECT vd.*, fi.file_name, fi.file_type
-            FROM vector_data vd
-            JOIN file_info fi ON vd.file_id = fi.id
-            WHERE {where_clause}
-            ORDER BY vd.created_at DESC
-            LIMIT %(top_k)s
-            """
-            params['top_k'] = top_k
-            
-            results = self.mysql_manager.execute_query(sql, params)
-            
-            return {
-                'success': True,
-                'message': '关键词搜索成功',
-                'data': {
-                    'keywords': keywords,
-                    'match_type': match_type,
-                    'results': results,
-                    'total': len(results)
-                }
-            }
-        except Exception as e:
-            logger.error(f"关键词搜索失败: {str(e)}")
-            return {'success': False, 'message': f'关键词搜索失败: {str(e)}', 'data': None}
-    
-    def hybrid_search(self, query: str, top_k: int = 10, vector_weight: float = 0.7, keyword_weight: float = 0.3) -> Dict[str, Any]:
-        try:
-            logger.info(f"开始混合搜索: {query}")
-            
-            vector_results = self._vector_search(query, top_k)
-            keyword_results = self._keyword_search([query], top_k)
-            combined_results = self._combine_search_results(vector_results, keyword_results, vector_weight, keyword_weight)
-            
-            return {
-                'success': True,
-                'message': '混合搜索成功',
-                'data': {
-                    'query': query,
-                    'results': combined_results[:top_k],
-                    'total': len(combined_results),
-                    'vector_weight': vector_weight,
-                    'keyword_weight': keyword_weight
-                }
-            }
-        except Exception as e:
-            logger.error(f"混合搜索失败: {str(e)}")
-            return {'success': False, 'message': f'混合搜索失败: {str(e)}', 'data': None}
-    
-    def generate_answer(self, query: str, context: str = '', max_length: int = 500) -> Dict[str, Any]:
-        try:
-            logger.info(f"开始生成答案: {query}")
-            
-            if not context:
-                search_results = self._vector_search(query, 5)
-                context = self._build_context_from_results(search_results)
-            
-            prompt = self._build_answer_prompt(query, context, max_length)
-            answer = self._call_llm(prompt)
-            
-            return {
-                'success': True,
-                'message': '答案生成成功',
-                'data': {
-                    'query': query,
-                    'answer': answer,
-                    'context': context,
-                    'max_length': max_length
-                }
-            }
-        except Exception as e:
-            logger.error(f"生成答案失败: {str(e)}")
-            return {'success': False, 'message': f'生成答案失败: {str(e)}', 'data': None}
-    
-    def get_search_history(self, page: int = 1, size: int = 10, query_type: str = '') -> Dict[str, Any]:
-        try:
-            where_conditions = []
-            params = {}
-            
-            if query_type:
-                where_conditions.append("query_type = %(query_type)s")
-                params['query_type'] = query_type
-            
-            where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
-            offset = (page - 1) * size
-            
-            count_sql = f"SELECT COUNT(*) as total FROM search_history WHERE {where_clause}"
-            count_result = self.mysql_manager.execute_query(count_sql, params)
-            total = count_result[0]['total'] if count_result else 0
-            
-            list_sql = f"""
-            SELECT id, query_text, query_type, result_count, search_time, user_ip
-            FROM search_history 
-            WHERE {where_clause}
-            ORDER BY search_time DESC
-            LIMIT %(size)s OFFSET %(offset)s
-            """
-            
-            params.update({'size': size, 'offset': offset})
-            history = self.mysql_manager.execute_query(list_sql, params)
-            
-            return {
-                'success': True,
-                'message': '获取搜索历史成功',
-                'data': {
-                    'history': history,
-                    'total': total,
-                    'page': page,
-                    'size': size,
-                    'total_pages': (total + size - 1) // size
-                }
-            }
-        except Exception as e:
-            logger.error(f"获取搜索历史失败: {str(e)}")
-            return {'success': False, 'message': f'获取搜索历史失败: {str(e)}', 'data': None}
-    
-    def _vector_search(self, query: str, top_k: int, file_type: str = '') -> List[Dict[str, Any]]:
-        try:
-            return []
-        except Exception as e:
-            logger.error(f"向量搜索失败: {str(e)}")
-            return []
-    
-    def _keyword_search(self, query: str, top_k: int, file_type: str = '') -> List[Dict[str, Any]]:
-        try:
-            where_conditions = ["content LIKE %(query)s"]
-            params = {'query': f'%{query}%', 'top_k': top_k}
-            
-            if file_type:
-                where_conditions.append("fi.file_type = %(file_type)s")
-                params['file_type'] = file_type
-            
-            where_clause = " AND ".join(where_conditions)
-            
-            sql = f"""
-            SELECT vd.*, fi.file_name, fi.file_type
-            FROM vector_data vd
-            JOIN file_info fi ON vd.file_id = fi.id
-            WHERE {where_clause}
-            ORDER BY vd.created_at DESC
-            LIMIT %(top_k)s
-            """
-            
-            return self.mysql_manager.execute_query(sql, params)
-        except Exception as e:
-            logger.error(f"关键词搜索失败: {str(e)}")
-            return []
-    
-    def _hybrid_search(self, query: str, top_k: int, file_type: str = '') -> List[Dict[str, Any]]:
-        try:
-            vector_results = self._vector_search(query, top_k, file_type)
-            keyword_results = self._keyword_search(query, top_k, file_type)
-            combined_results = vector_results + keyword_results
-            return combined_results[:top_k]
-        except Exception as e:
-            logger.error(f"混合搜索失败: {str(e)}")
-            return []
-    
-    def _combine_search_results(self, vector_results: List[Dict], keyword_results: List[Dict], 
-                               vector_weight: float, keyword_weight: float) -> List[Dict]:
-        combined = []
-        
-        for result in vector_results:
-            result['score'] = result.get('distance', 0) * vector_weight
-            combined.append(result)
-        
-        for result in keyword_results:
-            result['score'] = 1.0 * keyword_weight
-            combined.append(result)
-        
-        combined.sort(key=lambda x: x.get('score', 0), reverse=True)
-        return combined
-    
-    def _build_context_from_results(self, results: List[Dict[str, Any]]) -> str:
-        context_parts = []
-        for result in results:
-            content = result.get('content', '')
-            if content:
-                context_parts.append(content)
-        return "\n\n".join(context_parts)
-    
-    def _build_answer_prompt(self, query: str, context: str, max_length: int) -> str:
-        prompt = f"""
-        基于以下上下文信息，回答用户的问题。
-        
-        上下文信息：
-        {context}
-        
-        用户问题：
-        {query}
-        
-        请生成一个准确、完整的答案，长度不超过{max_length}个字符。
+    def __init__(self, config_path: str = 'config/config.yaml'):
         """
-        return prompt.strip()
+        初始化搜索服务
+        
+        Args:
+            config_path: 配置文件路径
+        """
+        self.config_path = config_path
+        self.logger = logging.getLogger(__name__)
+        
+        # 加载配置
+        self._load_configs()
+        
+        # 初始化数据库管理器
+        self.mysql_manager = MySQLManager()
+        self.milvus_manager = MilvusManager()
+        self.neo4j_manager = Neo4jManager()
+        
+        # 初始化模型
+        self._init_models()
     
-    def _call_llm(self, prompt: str) -> str:
+    def _load_configs(self) -> None:
+        """加载配置文件"""
         try:
-            return "这是一个模拟的答案，实际应用中需要调用DeepSeek API。"
-        except Exception as e:
-            logger.error(f"调用大语言模型失败: {str(e)}")
-            return "抱歉，无法生成答案。"
-    
-    def _save_search_history(self, query: str, query_type: str, result_count: int):
-        try:
-            sql = """
-            INSERT INTO search_history (query_text, query_type, result_count, user_ip)
-            VALUES (%(query)s, %(query_type)s, %(result_count)s, %(user_ip)s)
-            """
+            # 加载主配置
+            with open(self.config_path, 'r', encoding='utf-8') as file:
+                self.config = yaml.safe_load(file)
             
-            params = {
-                'query': query,
-                'query_type': query_type,
-                'result_count': result_count,
-                'user_ip': '127.0.0.1'
+            # 加载模型配置
+            with open('config/model.yaml', 'r', encoding='utf-8') as file:
+                self.model_config = yaml.safe_load(file)
+            
+            # 加载提示词配置
+            with open('config/prompt.yaml', 'r', encoding='utf-8') as file:
+                self.prompt_config = yaml.safe_load(file)
+            
+            self.logger.info("搜索服务配置加载成功")
+            
+        except Exception as e:
+            self.logger.error(f"加载搜索服务配置失败: {str(e)}")
+            raise
+    
+    def _init_models(self) -> None:
+        """初始化模型"""
+        try:
+            # 初始化嵌入模型
+            model_name = self.model_config['embedding']['model_name']
+            self.embedding_model = SentenceTransformer(
+                model_name,
+                cache_folder=self.model_config['embedding']['cache_dir']
+            )
+            
+            self.logger.info(f"嵌入模型初始化成功: {model_name}")
+            
+        except Exception as e:
+            self.logger.error(f"初始化模型失败: {str(e)}")
+            raise
+    
+    def _get_text_embedding(self, text: str) -> Optional[List[float]]:
+        """
+        获取文本向量
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            Optional[List[float]]: 文本向量，失败返回None
+        """
+        try:
+            # 文本预处理
+            processed_text = self._preprocess_text(text)
+            
+            # 生成向量
+            embedding = self.embedding_model.encode(
+                processed_text,
+                normalize_embeddings=self.model_config['embedding']['normalize']
+            )
+            
+            return embedding.tolist()
+            
+        except Exception as e:
+            self.logger.error(f"获取文本向量失败: {str(e)}")
+            return None
+    
+    def _preprocess_text(self, text: str) -> str:
+        """
+        文本预处理
+        
+        Args:
+            text: 原始文本
+            
+        Returns:
+            str: 预处理后的文本
+        """
+        try:
+            preprocessing_config = self.model_config['embedding']['preprocessing']
+            
+            # 清理文本
+            if preprocessing_config.get('clean_text', True):
+                text = re.sub(r'\s+', ' ', text)  # 合并多个空白字符
+                text = text.strip()
+            
+            # 转小写
+            if preprocessing_config.get('lowercase', False):
+                text = text.lower()
+            
+            # 移除特殊字符
+            if preprocessing_config.get('remove_special_chars', False):
+                text = re.sub(r'[^\w\s\u4e00-\u9fff]', '', text)
+            
+            # 限制长度
+            max_length = preprocessing_config.get('max_chunk_size', 500)
+            if len(text) > max_length:
+                text = text[:max_length]
+            
+            return text
+            
+        except Exception as e:
+            self.logger.error(f"文本预处理失败: {str(e)}")
+            return text
+    
+    def _call_deepseek_api(self, prompt: str, max_tokens: Optional[int] = None) -> Optional[str]:
+        """
+        调用DeepSeek API
+        
+        Args:
+            prompt: 提示词
+            max_tokens: 最大生成token数
+            
+        Returns:
+            Optional[str]: API响应内容，失败返回None
+        """
+        try:
+            deepseek_config = self.model_config['deepseek']
+            
+            headers = {
+                'Authorization': f"Bearer {deepseek_config['api_key']}",
+                'Content-Type': 'application/json'
             }
             
-            self.mysql_manager.execute_insert(sql, params)
+            data = {
+                'model': deepseek_config['model_name'],
+                'messages': [
+                    {'role': 'user', 'content': prompt}
+                ],
+                'max_tokens': max_tokens or deepseek_config['max_tokens'],
+                'temperature': deepseek_config['temperature'],
+                'top_p': deepseek_config['top_p']
+            }
+            
+            response = requests.post(
+                f"{deepseek_config['api_url']}/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=deepseek_config['timeout']
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result['choices'][0]['message']['content']
+            else:
+                self.logger.error(f"DeepSeek API调用失败: {response.status_code}, {response.text}")
+                return None
+                
         except Exception as e:
-            logger.error(f"保存搜索历史失败: {str(e)}") 
+            self.logger.error(f"调用DeepSeek API失败: {str(e)}")
+            return None
+    
+    def vector_search(self, query: str, top_k: int = 10, filters: Optional[Dict] = None) -> List[Dict]:
+        """
+        向量相似性搜索
+        
+        Args:
+            query: 查询文本
+            top_k: 返回结果数量
+            filters: 过滤条件
+            
+        Returns:
+            List[Dict]: 搜索结果
+        """
+        try:
+            # 获取查询向量
+            query_vector = self._get_text_embedding(query)
+            if not query_vector:
+                return []
+            
+            # 构建过滤表达式
+            expr = None
+            if filters:
+                conditions = []
+                if 'document_id' in filters:
+                    conditions.append(f"document_id == {filters['document_id']}")
+                if 'file_type' in filters:
+                    # 需要通过document_id关联查询文件类型
+                    pass
+                
+                if conditions:
+                    expr = " and ".join(conditions)
+            
+            # 执行向量搜索
+            results = self.milvus_manager.search_vectors(
+                query_vectors=[query_vector],
+                top_k=top_k,
+                expr=expr
+            )
+            
+            # 获取关联的文档信息
+            enhanced_results = []
+            for result in results:
+                # 获取文档信息
+                doc_info = self.mysql_manager.execute_query(
+                    "SELECT filename, file_type FROM documents WHERE id = :doc_id",
+                    {'doc_id': result['document_id']}
+                )
+                
+                if doc_info:
+                    result['document_info'] = doc_info[0]
+                
+                enhanced_results.append(result)
+            
+            self.logger.info(f"向量搜索完成，查询: {query}，返回{len(enhanced_results)}个结果")
+            return enhanced_results
+            
+        except Exception as e:
+            self.logger.error(f"向量搜索失败: {str(e)}")
+            return []
+    
+    def graph_search(self, entity_name: str, relationship_types: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        知识图谱搜索
+        
+        Args:
+            entity_name: 实体名称
+            relationship_types: 关系类型列表
+            
+        Returns:
+            Dict[str, Any]: 搜索结果
+        """
+        try:
+            # 查找实体
+            entities = self.neo4j_manager.find_nodes(
+                label="Entity",
+                properties={"name": entity_name}
+            )
+            
+            if not entities:
+                return {
+                    'entity': None,
+                    'neighbors': [],
+                    'relationships': []
+                }
+            
+            entity = entities[0]
+            entity_id = entity['node_id']
+            
+            # 获取邻居节点
+            neighbors = self.neo4j_manager.get_node_neighbors(
+                entity_id,
+                relationship_types
+            )
+            
+            # 获取相关关系
+            relationships = []
+            if relationship_types:
+                for rel_type in relationship_types:
+                    rels = self.neo4j_manager.find_relationships(
+                        relationship_type=rel_type,
+                        start_label="Entity"
+                    )
+                    relationships.extend(rels)
+            
+            result = {
+                'entity': entity,
+                'neighbors': neighbors,
+                'relationships': relationships
+            }
+            
+            self.logger.info(f"知识图谱搜索完成，实体: {entity_name}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"知识图谱搜索失败: {str(e)}")
+            return {
+                'entity': None,
+                'neighbors': [],
+                'relationships': []
+            }
+    
+    def hybrid_search(self, query: str, top_k: int = 10, 
+                     enable_graph: bool = True, 
+                     filters: Optional[Dict] = None) -> Dict[str, Any]:
+        """
+        混合搜索（向量搜索 + 知识图谱搜索）
+        
+        Args:
+            query: 查询文本
+            top_k: 返回结果数量
+            enable_graph: 是否启用知识图谱搜索
+            filters: 过滤条件
+            
+        Returns:
+            Dict[str, Any]: 混合搜索结果
+        """
+        try:
+            result = {
+                'query': query,
+                'vector_results': [],
+                'graph_results': {},
+                'combined_results': []
+            }
+            
+            # 向量搜索
+            vector_results = self.vector_search(query, top_k, filters)
+            result['vector_results'] = vector_results
+            
+            # 知识图谱搜索
+            if enable_graph:
+                # 提取查询中的实体
+                entities = self._extract_entities_from_query(query)
+                graph_results = {}
+                
+                for entity in entities:
+                    entity_result = self.graph_search(entity)
+                    if entity_result['entity']:
+                        graph_results[entity] = entity_result
+                
+                result['graph_results'] = graph_results
+            
+            # 合并结果
+            combined_results = self._combine_search_results(vector_results, result['graph_results'])
+            result['combined_results'] = combined_results
+            
+            self.logger.info(f"混合搜索完成，查询: {query}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"混合搜索失败: {str(e)}")
+            return {
+                'query': query,
+                'vector_results': [],
+                'graph_results': {},
+                'combined_results': []
+            }
+    
+    def _extract_entities_from_query(self, query: str) -> List[str]:
+        """
+        从查询中提取实体
+        
+        Args:
+            query: 查询文本
+            
+        Returns:
+            List[str]: 提取的实体列表
+        """
+        try:
+            # 使用DeepSeek API进行实体识别
+            prompt = self.prompt_config['entity_recognition']['ner_extraction'].format(
+                text_content=query
+            )
+            
+            response = self._call_deepseek_api(prompt)
+            if response:
+                # 解析JSON响应
+                try:
+                    entities_data = json.loads(response)
+                    all_entities = []
+                    for entity_type, entities in entities_data.items():
+                        if isinstance(entities, list):
+                            all_entities.extend(entities)
+                    return all_entities
+                except json.JSONDecodeError:
+                    self.logger.warning(f"无法解析实体识别结果: {response}")
+            
+            return []
+            
+        except Exception as e:
+            self.logger.error(f"提取实体失败: {str(e)}")
+            return []
+    
+    def _combine_search_results(self, vector_results: List[Dict], graph_results: Dict) -> List[Dict]:
+        """
+        合并搜索结果
+        
+        Args:
+            vector_results: 向量搜索结果
+            graph_results: 知识图谱搜索结果
+            
+        Returns:
+            List[Dict]: 合并后的结果
+        """
+        try:
+            combined = []
+            
+            # 添加向量搜索结果
+            for result in vector_results:
+                combined_item = {
+                    'type': 'vector',
+                    'score': result['score'],
+                    'content': result['content'],
+                    'document_id': result['document_id'],
+                    'chunk_index': result['chunk_index'],
+                    'metadata': result.get('metadata', {}),
+                    'document_info': result.get('document_info', {})
+                }
+                combined.append(combined_item)
+            
+            # 添加知识图谱结果
+            for entity_name, graph_data in graph_results.items():
+                if graph_data['entity']:
+                    combined_item = {
+                        'type': 'graph',
+                        'score': 1.0,  # 图搜索结果给予固定分数
+                        'entity': entity_name,
+                        'entity_properties': graph_data['entity']['properties'],
+                        'neighbors': graph_data['neighbors'],
+                        'relationships': graph_data['relationships']
+                    }
+                    combined.append(combined_item)
+            
+            # 按分数排序
+            combined.sort(key=lambda x: x['score'], reverse=True)
+            
+            return combined
+            
+        except Exception as e:
+            self.logger.error(f"合并搜索结果失败: {str(e)}")
+            return []
+    
+    def question_answering(self, question: str, context_limit: int = 5) -> Dict[str, Any]:
+        """
+        基于检索的问答
+        
+        Args:
+            question: 用户问题
+            context_limit: 上下文文档数量限制
+            
+        Returns:
+            Dict[str, Any]: 问答结果
+        """
+        try:
+            # 检索相关文档
+            search_results = self.hybrid_search(question, top_k=context_limit)
+            
+            # 准备上下文
+            relevant_docs = []
+            for result in search_results['combined_results'][:context_limit]:
+                if result['type'] == 'vector':
+                    relevant_docs.append(result['content'])
+                elif result['type'] == 'graph':
+                    # 将图信息转换为文本描述
+                    graph_desc = f"实体: {result['entity']}, 邻居: {len(result['neighbors'])}个"
+                    relevant_docs.append(graph_desc)
+            
+            context = "\n\n".join(relevant_docs)
+            
+            # 构建问答提示词
+            prompt = self.prompt_config['question_answering']['doc_qa'].format(
+                relevant_docs=context,
+                question=question
+            )
+            
+            # 调用大模型生成答案
+            answer = self._call_deepseek_api(prompt)
+            
+            result = {
+                'question': question,
+                'answer': answer,
+                'context': relevant_docs,
+                'search_results': search_results,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            self.logger.info(f"问答完成，问题: {question}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"问答失败: {str(e)}")
+            return {
+                'question': question,
+                'answer': f"抱歉，回答您的问题时出现错误: {str(e)}",
+                'context': [],
+                'search_results': {},
+                'timestamp': datetime.now().isoformat()
+            }
+    
+    def semantic_search(self, query: str, search_type: str = "all", 
+                       top_k: int = 10, filters: Optional[Dict] = None) -> Dict[str, Any]:
+        """
+        语义搜索
+        
+        Args:
+            query: 查询文本
+            search_type: 搜索类型 (vector, graph, all)
+            top_k: 返回结果数量
+            filters: 过滤条件
+            
+        Returns:
+            Dict[str, Any]: 搜索结果
+        """
+        try:
+            if search_type == "vector":
+                results = self.vector_search(query, top_k, filters)
+                return {
+                    'search_type': 'vector',
+                    'results': results,
+                    'total': len(results)
+                }
+            elif search_type == "graph":
+                entities = self._extract_entities_from_query(query)
+                graph_results = {}
+                for entity in entities:
+                    graph_results[entity] = self.graph_search(entity)
+                
+                return {
+                    'search_type': 'graph',
+                    'results': graph_results,
+                    'total': len(graph_results)
+                }
+            else:  # all
+                results = self.hybrid_search(query, top_k, True, filters)
+                return {
+                    'search_type': 'hybrid',
+                    'results': results,
+                    'total': len(results['combined_results'])
+                }
+                
+        except Exception as e:
+            self.logger.error(f"语义搜索失败: {str(e)}")
+            return {
+                'search_type': search_type,
+                'results': [],
+                'total': 0,
+                'error': str(e)
+            }
+    
+    def get_search_suggestions(self, partial_query: str, limit: int = 5) -> List[str]:
+        """
+        获取搜索建议
+        
+        Args:
+            partial_query: 部分查询文本
+            limit: 建议数量限制
+            
+        Returns:
+            List[str]: 搜索建议列表
+        """
+        try:
+            # 从数据库中获取相似的文档标题或内容片段
+            query = """
+            SELECT DISTINCT content
+            FROM document_chunks
+            WHERE content LIKE :pattern
+            LIMIT :limit
+            """
+            
+            pattern = f"%{partial_query}%"
+            results = self.mysql_manager.execute_query(
+                query, 
+                {'pattern': pattern, 'limit': limit}
+            )
+            
+            suggestions = []
+            for result in results:
+                content = result['content']
+                # 提取包含查询词的句子
+                sentences = content.split('。')
+                for sentence in sentences:
+                    if partial_query in sentence and len(sentence.strip()) > 0:
+                        suggestions.append(sentence.strip())
+                        if len(suggestions) >= limit:
+                            break
+                if len(suggestions) >= limit:
+                    break
+            
+            return suggestions[:limit]
+            
+        except Exception as e:
+            self.logger.error(f"获取搜索建议失败: {str(e)}")
+            return []

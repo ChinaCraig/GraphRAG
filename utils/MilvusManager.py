@@ -1,24 +1,23 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Milvus数据库管理器
+Milvus向量数据库管理器
+负责向量数据的存储、检索和管理
 """
 
 import yaml
 import logging
-from pymilvus import connections, Collection, CollectionSchema, FieldSchema, DataType, utility
-from typing import Optional, Dict, Any, List, Tuple
 import numpy as np
-import os
-
-logger = logging.getLogger(__name__)
+from typing import Optional, Dict, Any, List, Union
+from pymilvus import (
+    connections, Collection, DataType, FieldSchema, CollectionSchema,
+    utility, Index
+)
+from pymilvus.exceptions import MilvusException
+import json
 
 class MilvusManager:
-    """
-    Milvus数据库管理器
-    """
+    """Milvus向量数据库管理器"""
     
-    def __init__(self, config_path: str = "config/db.yaml"):
+    def __init__(self, config_path: str = 'config/db.yaml'):
         """
         初始化Milvus管理器
         
@@ -26,222 +25,265 @@ class MilvusManager:
             config_path: 配置文件路径
         """
         self.config_path = config_path
-        self.connection = None
         self.collection = None
+        self.logger = logging.getLogger(__name__)
+        
+        # 加载配置
         self._load_config()
+        
+        # 初始化连接
         self._init_connection()
+        
+        # 初始化集合
+        self._init_collection()
     
-    def _load_config(self):
-        """
-        加载Milvus配置
-        """
+    def _load_config(self) -> None:
+        """加载Milvus配置"""
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-            
-            self.milvus_config = config.get('milvus', {})
-            logger.info("Milvus配置加载成功")
-            
+            with open(self.config_path, 'r', encoding='utf-8') as file:
+                config = yaml.safe_load(file)
+                self.milvus_config = config['milvus']
+                self.logger.info("Milvus配置加载成功")
         except Exception as e:
-            logger.error(f"加载Milvus配置失败: {str(e)}")
+            self.logger.error(f"加载Milvus配置失败: {str(e)}")
             raise
     
-    def _init_connection(self):
-        """
-        初始化Milvus连接
-        """
+    def _init_connection(self) -> None:
+        """初始化Milvus连接"""
         try:
-            host = self.milvus_config.get('host', 'localhost')
-            port = self.milvus_config.get('port', 19530)
-            database = self.milvus_config.get('database', 'graph_rag')
-            collection = self.milvus_config.get('collection', 'graph_rag')
-            
-            # 连接Milvus
-            self.connection = connections.connect(
+            # 连接到Milvus服务器
+            connections.connect(
                 alias="default",
-                host=host,
-                port=port
+                host=self.milvus_config['host'],
+                port=str(self.milvus_config['port']),
+                timeout=self.milvus_config.get('timeout', 30)
             )
             
-            # 设置数据库
-            if database != "default":
-                connections.set_database(database)
+            self.logger.info(f"Milvus连接成功: {self.milvus_config['host']}:{self.milvus_config['port']}")
             
-            self.collection_name = collection
-            logger.info("Milvus连接初始化成功")
-            
-        except Exception as e:
-            logger.error(f"初始化Milvus连接失败: {str(e)}")
+        except MilvusException as e:
+            self.logger.error(f"Milvus连接失败: {str(e)}")
             raise
     
-    def create_collection(self, dimension: int = 768) -> bool:
-        """
-        创建集合
-        
-        Args:
-            dimension: 向量维度
-            
-        Returns:
-            bool: 创建是否成功
-        """
+    def _init_collection(self) -> None:
+        """初始化集合"""
         try:
-            # 检查集合是否已存在
-            if utility.has_collection(self.collection_name):
-                logger.info(f"集合 {self.collection_name} 已存在")
-                return True
+            collection_name = self.milvus_config['collection']
             
-            # 定义字段
+            # 检查集合是否存在
+            if utility.has_collection(collection_name):
+                self.collection = Collection(collection_name)
+                self.logger.info(f"使用已存在的集合: {collection_name}")
+            else:
+                # 创建集合
+                self._create_collection()
+                
+        except MilvusException as e:
+            self.logger.error(f"初始化集合失败: {str(e)}")
+            raise
+    
+    def _create_collection(self) -> None:
+        """创建集合"""
+        try:
+            collection_name = self.milvus_config['collection']
+            dimension = self.milvus_config['dimension']
+            
+            # 定义字段模式
             fields = [
-                FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-                FieldSchema(name="file_id", dtype=DataType.INT64, description="文件ID"),
-                FieldSchema(name="content_type", dtype=DataType.VARCHAR, max_length=50, description="内容类型"),
-                FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=65535, description="原始内容"),
-                FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dimension, description="向量"),
-                FieldSchema(name="embedding_model", dtype=DataType.VARCHAR, max_length=100, description="嵌入模型"),
-                FieldSchema(name="position_info", dtype=DataType.JSON, description="位置信息")
+                FieldSchema(
+                    name="id",
+                    dtype=DataType.VARCHAR,
+                    max_length=100,
+                    is_primary=True,
+                    description="唯一标识符"
+                ),
+                FieldSchema(
+                    name="vector",
+                    dtype=DataType.FLOAT_VECTOR,
+                    dim=dimension,
+                    description="向量数据"
+                ),
+                FieldSchema(
+                    name="document_id",
+                    dtype=DataType.INT64,
+                    description="文档ID"
+                ),
+                FieldSchema(
+                    name="chunk_index",
+                    dtype=DataType.INT64,
+                    description="分块索引"
+                ),
+                FieldSchema(
+                    name="content",
+                    dtype=DataType.VARCHAR,
+                    max_length=65535,
+                    description="文本内容"
+                ),
+                FieldSchema(
+                    name="metadata",
+                    dtype=DataType.VARCHAR,
+                    max_length=65535,
+                    description="元数据"
+                )
             ]
             
             # 创建集合模式
-            schema = CollectionSchema(fields, description="GraphRAG向量集合")
+            schema = CollectionSchema(
+                fields=fields,
+                description="GraphRAG向量集合"
+            )
             
             # 创建集合
-            self.collection = Collection(self.collection_name, schema)
+            self.collection = Collection(
+                name=collection_name,
+                schema=schema
+            )
             
             # 创建索引
+            self._create_index()
+            
+            self.logger.info(f"集合创建成功: {collection_name}")
+            
+        except MilvusException as e:
+            self.logger.error(f"创建集合失败: {str(e)}")
+            raise
+    
+    def _create_index(self) -> None:
+        """创建向量索引"""
+        try:
             index_params = {
-                "metric_type": "COSINE",
-                "index_type": self.milvus_config.get('index_type', 'IVFFLAT'),
-                "params": {"nlist": self.milvus_config.get('nlist', 1024)}
+                "index_type": self.milvus_config.get('index_type', 'IVF_FLAT'),
+                "metric_type": self.milvus_config.get('metric_type', 'COSINE'),
+                "params": {
+                    "nlist": self.milvus_config.get('nlist', 1024)
+                }
             }
             
-            self.collection.create_index("embedding", index_params)
-            logger.info(f"集合 {self.collection_name} 创建成功")
+            self.collection.create_index(
+                field_name="vector",
+                index_params=index_params
+            )
             
-            return True
+            self.logger.info("向量索引创建成功")
             
-        except Exception as e:
-            logger.error(f"创建集合失败: {str(e)}")
-            return False
+        except MilvusException as e:
+            self.logger.error(f"创建向量索引失败: {str(e)}")
+            raise
     
     def insert_vectors(self, data: List[Dict[str, Any]]) -> bool:
         """
         插入向量数据
         
         Args:
-            data: 向量数据列表，每个元素包含file_id, content_type, content, embedding, embedding_model, position_info
+            data: 向量数据列表，每个元素包含id, vector, document_id, chunk_index, content, metadata
             
         Returns:
-            bool: 插入是否成功
+            bool: 插入成功返回True
         """
         try:
-            if not self.collection:
-                self.create_collection()
+            if not data:
+                self.logger.warning("没有数据需要插入")
+                return True
             
             # 准备插入数据
             insert_data = {
-                "file_id": [item["file_id"] for item in data],
-                "content_type": [item["content_type"] for item in data],
+                "id": [item["id"] for item in data],
+                "vector": [item["vector"] for item in data],
+                "document_id": [item["document_id"] for item in data],
+                "chunk_index": [item["chunk_index"] for item in data],
                 "content": [item["content"] for item in data],
-                "embedding": [item["embedding"] for item in data],
-                "embedding_model": [item["embedding_model"] for item in data],
-                "position_info": [item.get("position_info", {}) for item in data]
+                "metadata": [json.dumps(item.get("metadata", {}), ensure_ascii=False) for item in data]
             }
             
             # 插入数据
             self.collection.insert(insert_data)
+            
+            # 刷新数据，确保数据被持久化
             self.collection.flush()
             
-            logger.info(f"成功插入 {len(data)} 条向量数据")
+            self.logger.info(f"向量数据插入成功，共插入{len(data)}条记录")
             return True
             
-        except Exception as e:
-            logger.error(f"插入向量数据失败: {str(e)}")
+        except MilvusException as e:
+            self.logger.error(f"插入向量数据失败: {str(e)}")
             return False
     
-    def search_vectors(self, query_vector: List[float], top_k: int = 10, 
-                      filter_expr: Optional[str] = None) -> List[Dict[str, Any]]:
+    def search_vectors(self, query_vectors: List[List[float]], top_k: int = 10, 
+                      search_params: Optional[Dict] = None, 
+                      expr: Optional[str] = None) -> List[Dict]:
         """
-        搜索向量
+        向量相似性搜索
         
         Args:
-            query_vector: 查询向量
-            top_k: 返回结果数量
-            filter_expr: 过滤表达式
+            query_vectors: 查询向量列表
+            top_k: 返回的相似向量数量
+            search_params: 搜索参数
+            expr: 过滤表达式
             
         Returns:
-            List[Dict[str, Any]]: 搜索结果
+            List[Dict]: 搜索结果
         """
         try:
-            if not self.collection:
-                logger.error("集合不存在")
-                return []
-            
-            # 加载集合
+            # 加载集合到内存
             self.collection.load()
             
-            # 搜索参数
-            search_params = {
-                "metric_type": "COSINE",
-                "params": {"nprobe": 10}
-            }
+            # 默认搜索参数
+            if search_params is None:
+                search_params = {
+                    "metric_type": self.milvus_config.get('metric_type', 'COSINE'),
+                    "params": {"nprobe": 16}
+                }
             
             # 执行搜索
             results = self.collection.search(
-                data=[query_vector],
-                anns_field="embedding",
+                data=query_vectors,
+                anns_field="vector",
                 param=search_params,
                 limit=top_k,
-                expr=filter_expr,
-                output_fields=["file_id", "content_type", "content", "embedding_model", "position_info"]
+                expr=expr,
+                output_fields=["id", "document_id", "chunk_index", "content", "metadata"]
             )
             
-            # 格式化结果
+            # 处理搜索结果
             search_results = []
             for hits in results:
                 for hit in hits:
-                    search_results.append({
-                        "id": hit.id,
-                        "distance": hit.distance,
-                        "file_id": hit.entity.get("file_id"),
-                        "content_type": hit.entity.get("content_type"),
+                    result = {
+                        "id": hit.entity.get("id"),
+                        "score": hit.score,
+                        "document_id": hit.entity.get("document_id"),
+                        "chunk_index": hit.entity.get("chunk_index"),
                         "content": hit.entity.get("content"),
-                        "embedding_model": hit.entity.get("embedding_model"),
-                        "position_info": hit.entity.get("position_info")
-                    })
+                        "metadata": json.loads(hit.entity.get("metadata", "{}"))
+                    }
+                    search_results.append(result)
             
+            self.logger.info(f"向量搜索完成，返回{len(search_results)}条结果")
             return search_results
             
-        except Exception as e:
-            logger.error(f"搜索向量失败: {str(e)}")
+        except MilvusException as e:
+            self.logger.error(f"向量搜索失败: {str(e)}")
             return []
     
-    def delete_vectors(self, file_id: int) -> bool:
+    def delete_vectors(self, expr: str) -> bool:
         """
-        删除指定文件的向量数据
+        删除向量数据
         
         Args:
-            file_id: 文件ID
+            expr: 删除条件表达式
             
         Returns:
-            bool: 删除是否成功
+            bool: 删除成功返回True
         """
         try:
-            if not self.collection:
-                logger.error("集合不存在")
-                return False
-            
-            # 删除表达式
-            expr = f"file_id == {file_id}"
-            
-            # 执行删除
             self.collection.delete(expr)
             self.collection.flush()
             
-            logger.info(f"成功删除文件ID为 {file_id} 的向量数据")
+            self.logger.info(f"向量数据删除成功，条件: {expr}")
             return True
             
-        except Exception as e:
-            logger.error(f"删除向量数据失败: {str(e)}")
+        except MilvusException as e:
+            self.logger.error(f"删除向量数据失败: {str(e)}")
             return False
     
     def get_collection_stats(self) -> Dict[str, Any]:
@@ -252,65 +294,116 @@ class MilvusManager:
             Dict[str, Any]: 集合统计信息
         """
         try:
-            if not self.collection:
-                return {}
-            
-            stats = self.collection.get_statistics()
+            stats = self.collection.num_entities
             return {
-                "collection_name": self.collection_name,
-                "num_entities": stats.get("row_count", 0),
-                "indexed_entities": stats.get("indexed_entities", 0)
+                "collection_name": self.collection.name,
+                "total_entities": stats,
+                "schema": self.collection.schema
             }
             
-        except Exception as e:
-            logger.error(f"获取集合统计信息失败: {str(e)}")
+        except MilvusException as e:
+            self.logger.error(f"获取集合统计信息失败: {str(e)}")
             return {}
     
-    def test_connection(self) -> bool:
+    def create_partition(self, partition_name: str) -> bool:
         """
-        测试数据库连接
+        创建分区
         
+        Args:
+            partition_name: 分区名称
+            
         Returns:
-            bool: 连接是否成功
+            bool: 创建成功返回True
         """
         try:
-            # 检查连接
-            if not self.connection:
-                return False
+            if self.collection.has_partition(partition_name):
+                self.logger.info(f"分区已存在: {partition_name}")
+                return True
             
-            # 获取服务器版本
-            version = utility.get_server_version()
-            logger.info(f"Milvus服务器版本: {version}")
+            self.collection.create_partition(partition_name)
+            self.logger.info(f"分区创建成功: {partition_name}")
+            return True
+            
+        except MilvusException as e:
+            self.logger.error(f"创建分区失败: {str(e)}")
+            return False
+    
+    def query_by_id(self, ids: List[str]) -> List[Dict]:
+        """
+        根据ID查询向量数据
+        
+        Args:
+            ids: ID列表
+            
+        Returns:
+            List[Dict]: 查询结果
+        """
+        try:
+            self.collection.load()
+            
+            expr = f"id in {ids}"
+            results = self.collection.query(
+                expr=expr,
+                output_fields=["id", "document_id", "chunk_index", "content", "metadata"]
+            )
+            
+            query_results = []
+            for result in results:
+                query_result = {
+                    "id": result.get("id"),
+                    "document_id": result.get("document_id"),
+                    "chunk_index": result.get("chunk_index"),
+                    "content": result.get("content"),
+                    "metadata": json.loads(result.get("metadata", "{}"))
+                }
+                query_results.append(query_result)
+            
+            self.logger.info(f"ID查询完成，返回{len(query_results)}条结果")
+            return query_results
+            
+        except MilvusException as e:
+            self.logger.error(f"ID查询失败: {str(e)}")
+            return []
+    
+    def update_vector(self, vector_id: str, new_data: Dict[str, Any]) -> bool:
+        """
+        更新向量数据（通过删除后重新插入实现）
+        
+        Args:
+            vector_id: 向量ID
+            new_data: 新数据
+            
+        Returns:
+            bool: 更新成功返回True
+        """
+        try:
+            # 删除旧数据
+            self.delete_vectors(f"id == '{vector_id}'")
+            
+            # 插入新数据
+            self.insert_vectors([new_data])
+            
+            self.logger.info(f"向量数据更新成功，ID: {vector_id}")
             return True
             
         except Exception as e:
-            logger.error(f"Milvus连接测试失败: {str(e)}")
+            self.logger.error(f"更新向量数据失败: {str(e)}")
             return False
     
-    def close(self):
-        """
-        关闭数据库连接
-        """
+    def close(self) -> None:
+        """关闭连接"""
         try:
             if self.collection:
                 self.collection.release()
-            if self.connection:
-                connections.disconnect("default")
-            logger.info("Milvus连接已关闭")
+            connections.disconnect(alias="default")
+            self.logger.info("Milvus连接已关闭")
         except Exception as e:
-            logger.error(f"关闭Milvus连接失败: {str(e)}")
-
-# 全局Milvus管理器实例
-milvus_manager = None
-
-def get_milvus_manager() -> MilvusManager:
-    """
-    获取Milvus管理器实例（单例模式）
+            self.logger.error(f"关闭Milvus连接失败: {str(e)}")
     
-    Returns:
-        MilvusManager: Milvus管理器实例
-    """
-    global milvus_manager
-    if milvus_manager is None:
-        milvus_manager = MilvusManager()
-    return milvus_manager 
+    def __enter__(self):
+        """上下文管理器入口"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器出口"""
+        self.close()

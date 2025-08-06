@@ -1,347 +1,484 @@
-# -*- coding: utf-8 -*-
 """
 文件管理服务
-处理各种文件类型的上传、解析和内容提取
+负责文件的上传、处理、存储和管理功能
 """
 
 import os
-import json
+import hashlib
 import logging
-from typing import Dict, Any, List, Optional
-from pathlib import Path
+import yaml
+from typing import Optional, Dict, Any, List
+from datetime import datetime
+from werkzeug.datastructures import FileStorage
+from werkzeug.utils import secure_filename
+import json
 
-# 导入PDF提取服务
-from app.service.pdf.PdfExtractService import extract_pdf_content
-
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from utils.MySQLManager import MySQLManager
 
 
 class FileService:
     """文件管理服务类"""
     
-    def __init__(self):
-        """初始化文件服务"""
-        self.upload_base_path = Path("upload")
-        self.supported_extensions = {
-            '.pdf': 'pdf',
-            '.docx': 'word',
-            '.doc': 'word',
-            '.xlsx': 'excel',
-            '.xls': 'excel',
-            '.pptx': 'ppt',
-            '.ppt': 'ppt',
-            '.md': 'md',
-            '.txt': 'txt',
-            '.jpg': 'img',
-            '.jpeg': 'img',
-            '.png': 'img',
-            '.gif': 'img'
-        }
-    
-    def upload_file(self, file_path: str, file_type: Optional[str] = None) -> Dict[str, Any]:
+    def __init__(self, config_path: str = 'config/config.yaml'):
         """
-        上传文件并进行初步处理
+        初始化文件服务
         
         Args:
-            file_path (str): 文件路径
-            file_type (str, optional): 文件类型，如果不提供则自动检测
+            config_path: 配置文件路径
+        """
+        self.config_path = config_path
+        self.logger = logging.getLogger(__name__)
+        
+        # 加载配置
+        self._load_config()
+        
+        # 初始化数据库管理器
+        self.mysql_manager = MySQLManager()
+        
+        # 创建必要的目录
+        self._create_directories()
+    
+    def _load_config(self) -> None:
+        """加载配置文件"""
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as file:
+                config = yaml.safe_load(file)
+                self.file_config = config['file']
+                self.logger.info("文件服务配置加载成功")
+        except Exception as e:
+            self.logger.error(f"加载文件服务配置失败: {str(e)}")
+            raise
+    
+    def _create_directories(self) -> None:
+        """创建必要的目录"""
+        directories = [
+            self.file_config['upload_folder'],
+            self.file_config['processed_folder'],
+            self.file_config['temp_folder']
+        ]
+        
+        for directory in directories:
+            if not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+                self.logger.info(f"创建目录: {directory}")
+    
+    def _get_file_hash(self, file_path: str) -> str:
+        """
+        计算文件哈希值
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            str: 文件的SHA256哈希值
+        """
+        hash_sha256 = hashlib.sha256()
+        try:
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_sha256.update(chunk)
+            return hash_sha256.hexdigest()
+        except Exception as e:
+            self.logger.error(f"计算文件哈希失败: {str(e)}")
+            return ""
+    
+    def _is_allowed_file(self, filename: str) -> bool:
+        """
+        检查文件类型是否允许
+        
+        Args:
+            filename: 文件名
+            
+        Returns:
+            bool: 是否允许上传
+        """
+        if '.' not in filename:
+            return False
+        
+        file_ext = filename.rsplit('.', 1)[1].lower()
+        return file_ext in self.file_config['allowed_extensions']
+    
+    def upload_file(self, file: FileStorage, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        上传文件
+        
+        Args:
+            file: 上传的文件对象
+            metadata: 文件元数据
             
         Returns:
             Dict[str, Any]: 上传结果
         """
         try:
-            # 验证文件
-            if not os.path.exists(file_path):
-                raise ValueError(f"文件不存在: {file_path}")
+            # 检查文件是否存在
+            if not file or file.filename == '':
+                return {
+                    'success': False,
+                    'message': '未选择文件',
+                    'file_id': None
+                }
             
-            # 获取文件信息
-            file_info = self._get_file_info(file_path)
+            # 检查文件类型
+            if not self._is_allowed_file(file.filename):
+                return {
+                    'success': False,
+                    'message': f'不支持的文件类型',
+                    'file_id': None
+                }
             
-            # 自动检测文件类型
-            if not file_type:
-                file_type = self._detect_file_type(file_path)
+            # 检查文件大小
+            file.seek(0, os.SEEK_END)
+            file_size = file.tell()
+            file.seek(0)
             
-            # 移动文件到对应目录
-            target_path = self._move_file_to_category(file_path, file_type)
+            if file_size > self.file_config['max_file_size']:
+                return {
+                    'success': False,
+                    'message': f'文件大小超过限制 ({self.file_config["max_file_size"]} bytes)',
+                    'file_id': None
+                }
             
-            # 更新文件信息
-            file_info['target_path'] = str(target_path)
-            file_info['file_type'] = file_type
+            # 生成安全的文件名
+            filename = secure_filename(file.filename)
+            file_ext = filename.rsplit('.', 1)[1].lower()
             
-            logger.info(f"文件上传成功: {target_path}")
+            # 生成唯一文件名
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            unique_filename = f"{timestamp}_{filename}"
             
-            return {
-                'success': True,
-                'message': '文件上传成功',
-                'file_info': file_info
+            # 保存文件
+            file_path = os.path.join(self.file_config['upload_folder'], unique_filename)
+            file.save(file_path)
+            
+            # 计算文件哈希
+            content_hash = self._get_file_hash(file_path)
+            
+            # 检查是否已存在相同内容的文件
+            existing_file = self._check_duplicate_file(content_hash)
+            if existing_file:
+                # 删除刚保存的重复文件
+                os.remove(file_path)
+                return {
+                    'success': True,
+                    'message': '文件已存在',
+                    'file_id': existing_file['id'],
+                    'duplicate': True
+                }
+            
+            # 保存文件信息到数据库
+            file_data = {
+                'filename': filename,
+                'file_path': file_path,
+                'file_type': file_ext,
+                'file_size': file_size,
+                'upload_time': datetime.now(),
+                'process_status': 'pending',
+                'content_hash': content_hash,
+                'metadata': json.dumps(metadata or {}, ensure_ascii=False)
             }
             
+            success = self.mysql_manager.insert_data('documents', file_data)
+            
+            if success:
+                # 获取插入的文件ID
+                file_info = self._get_file_by_hash(content_hash)
+                file_id = file_info['id'] if file_info else None
+                
+                self.logger.info(f"文件上传成功: {filename}, ID: {file_id}")
+                return {
+                    'success': True,
+                    'message': '文件上传成功',
+                    'file_id': file_id,
+                    'duplicate': False
+                }
+            else:
+                # 删除已保存的文件
+                os.remove(file_path)
+                return {
+                    'success': False,
+                    'message': '保存文件信息失败',
+                    'file_id': None
+                }
+                
         except Exception as e:
-            logger.error(f"文件上传失败: {str(e)}")
+            self.logger.error(f"文件上传失败: {str(e)}")
             return {
                 'success': False,
                 'message': f'文件上传失败: {str(e)}',
-                'file_info': None
+                'file_id': None
             }
     
-    def extract_file_content(self, file_path: str) -> Dict[str, Any]:
+    def _check_duplicate_file(self, content_hash: str) -> Optional[Dict[str, Any]]:
         """
-        提取文件内容
+        检查重复文件
         
         Args:
-            file_path (str): 文件路径
+            content_hash: 文件内容哈希
             
         Returns:
-            Dict[str, Any]: 提取结果
+            Optional[Dict[str, Any]]: 重复文件信息，不存在返回None
         """
         try:
-            # 检测文件类型
-            file_type = self._detect_file_type(file_path)
-            
-            # 根据文件类型调用相应的提取服务
-            if file_type == 'pdf':
-                return self._extract_pdf_content(file_path)
-            elif file_type == 'word':
-                return self._extract_word_content(file_path)
-            elif file_type == 'excel':
-                return self._extract_excel_content(file_path)
-            elif file_type == 'ppt':
-                return self._extract_ppt_content(file_path)
-            elif file_type == 'md':
-                return self._extract_md_content(file_path)
-            elif file_type == 'txt':
-                return self._extract_txt_content(file_path)
-            elif file_type == 'img':
-                return self._extract_img_content(file_path)
-            else:
-                raise ValueError(f"不支持的文件类型: {file_type}")
-                
+            query = "SELECT * FROM documents WHERE content_hash = :hash LIMIT 1"
+            result = self.mysql_manager.execute_query(query, {'hash': content_hash})
+            return result[0] if result else None
         except Exception as e:
-            logger.error(f"文件内容提取失败: {str(e)}")
-            return {
-                'success': False,
-                'message': f'文件内容提取失败: {str(e)}',
-                'content': None
-            }
-    
-    def process_file_for_rag(self, file_path: str) -> Dict[str, Any]:
-        """
-        为RAG系统处理文件（完整流程）
-        
-        Args:
-            file_path (str): 文件路径
-            
-        Returns:
-            Dict[str, Any]: 处理结果，包含向量化和图数据库所需的数据
-        """
-        try:
-            # 1. 上传文件
-            upload_result = self.upload_file(file_path)
-            if not upload_result['success']:
-                return upload_result
-            
-            # 2. 提取内容
-            target_path = upload_result['file_info']['target_path']
-            extract_result = self.extract_file_content(target_path)
-            if not extract_result['success']:
-                return extract_result
-            
-            # 3. 准备RAG数据
-            rag_data = self._prepare_rag_data(extract_result['content'])
-            
-            return {
-                'success': True,
-                'message': '文件处理完成',
-                'file_info': upload_result['file_info'],
-                'extracted_content': extract_result['content'],
-                'rag_data': rag_data
-            }
-            
-        except Exception as e:
-            logger.error(f"文件RAG处理失败: {str(e)}")
-            return {
-                'success': False,
-                'message': f'文件RAG处理失败: {str(e)}',
-                'rag_data': None
-            }
-    
-    def _get_file_info(self, file_path: str) -> Dict[str, Any]:
-        """获取文件基本信息"""
-        file_path = Path(file_path)
-        return {
-            'file_name': file_path.name,
-            'file_size': file_path.stat().st_size,
-            'file_extension': file_path.suffix,
-            'original_path': str(file_path)
-        }
-    
-    def _detect_file_type(self, file_path: str) -> str:
-        """检测文件类型"""
-        file_extension = Path(file_path).suffix.lower()
-        return self.supported_extensions.get(file_extension, 'unknown')
-    
-    def _move_file_to_category(self, file_path: str, file_type: str) -> Path:
-        """将文件移动到对应类型目录"""
-        source_path = Path(file_path)
-        target_dir = self.upload_base_path / file_type
-        target_dir.mkdir(parents=True, exist_ok=True)
-        
-        target_path = target_dir / source_path.name
-        
-        # 如果目标文件已存在，添加序号
-        counter = 1
-        while target_path.exists():
-            name_parts = source_path.stem, counter, source_path.suffix
-            target_path = target_dir / f"{name_parts[0]}_{name_parts[1]}{name_parts[2]}"
-            counter += 1
-        
-        # 复制文件（保留原文件）
-        import shutil
-        shutil.copy2(source_path, target_path)
-        
-        return target_path
-    
-    def _extract_pdf_content(self, file_path: str) -> Dict[str, Any]:
-        """提取PDF内容"""
-        try:
-            content = extract_pdf_content(file_path)
-            return {
-                'success': True,
-                'message': 'PDF内容提取成功',
-                'content': content
-            }
-        except Exception as e:
-            return {
-                'success': False,
-                'message': f'PDF内容提取失败: {str(e)}',
-                'content': None
-            }
-    
-    def _extract_word_content(self, file_path: str) -> Dict[str, Any]:
-        """提取Word内容（待实现）"""
-        # TODO: 实现Word内容提取
-        return {
-            'success': False,
-            'message': 'Word内容提取尚未实现',
-            'content': None
-        }
-    
-    def _extract_excel_content(self, file_path: str) -> Dict[str, Any]:
-        """提取Excel内容（待实现）"""
-        # TODO: 实现Excel内容提取
-        return {
-            'success': False,
-            'message': 'Excel内容提取尚未实现',
-            'content': None
-        }
-    
-    def _extract_ppt_content(self, file_path: str) -> Dict[str, Any]:
-        """提取PPT内容（待实现）"""
-        # TODO: 实现PPT内容提取
-        return {
-            'success': False,
-            'message': 'PPT内容提取尚未实现',
-            'content': None
-        }
-    
-    def _extract_md_content(self, file_path: str) -> Dict[str, Any]:
-        """提取Markdown内容（待实现）"""
-        # TODO: 实现Markdown内容提取
-        return {
-            'success': False,
-            'message': 'Markdown内容提取尚未实现',
-            'content': None
-        }
-    
-    def _extract_txt_content(self, file_path: str) -> Dict[str, Any]:
-        """提取文本文件内容（待实现）"""
-        # TODO: 实现文本文件内容提取
-        return {
-            'success': False,
-            'message': '文本文件内容提取尚未实现',
-            'content': None
-        }
-    
-    def _extract_img_content(self, file_path: str) -> Dict[str, Any]:
-        """提取图片内容（待实现）"""
-        # TODO: 实现图片内容提取（OCR等）
-        return {
-            'success': False,
-            'message': '图片内容提取尚未实现',
-            'content': None
-        }
-    
-    def _prepare_rag_data(self, extracted_content: Dict[str, Any]) -> Dict[str, Any]:
-        """准备RAG系统所需的数据格式"""
-        if not extracted_content:
+            self.logger.error(f"检查重复文件失败: {str(e)}")
             return None
-        
-        # 提取sections用于向量化
-        sections_for_vector = []
-        if 'sections' in extracted_content:
-            for section_id, section_info in extracted_content['sections'].items():
-                # 收集section中的所有文本内容
-                section_texts = []
-                for element_id in section_info['elements']:
-                    if element_id in extracted_content['elements']:
-                        element = extracted_content['elements'][element_id]
-                        section_texts.append(element['content'])
-                
-                sections_for_vector.append({
-                    'section_id': section_id,
-                    'title': section_info['title'],
-                    'content': ' '.join(section_texts),
-                    'page_number': section_info['page_number'],
-                    'word_count': section_info['word_count']
-                })
-        
-        # 提取elements用于图数据库
-        elements_for_graph = []
-        if 'elements' in extracted_content:
-            for element_id, element in extracted_content['elements'].items():
-                elements_for_graph.append({
-                    'element_id': element_id,
-                    'element_type': element['element_type'],
-                    'content': element['content'],
-                    'section_id': element['section_id'],
-                    'page_number': element['metadata']['page_number'],
-                    'language': element['metadata']['language']
-                })
-        
-        return {
-            'sections_for_vector': sections_for_vector,
-            'elements_for_graph': elements_for_graph,
-            'file_summary': extracted_content.get('summary', {}),
-            'extraction_metadata': extracted_content.get('extraction_metadata', {})
-        }
-
-
-# 便捷函数
-def process_pdf_for_rag(pdf_path: str) -> Dict[str, Any]:
-    """
-    处理PDF文件用于RAG系统的便捷函数
     
-    Args:
-        pdf_path (str): PDF文件路径
+    def _get_file_by_hash(self, content_hash: str) -> Optional[Dict[str, Any]]:
+        """
+        根据哈希获取文件信息
         
-    Returns:
-        Dict[str, Any]: 处理结果
-    """
-    service = FileService()
-    return service.process_file_for_rag(pdf_path)
-
-
-# 测试用例
-if __name__ == "__main__":
-    # 示例使用
-    test_pdf_path = "/path/to/test.pdf"
-    if os.path.exists(test_pdf_path):
+        Args:
+            content_hash: 文件内容哈希
+            
+        Returns:
+            Optional[Dict[str, Any]]: 文件信息
+        """
         try:
-            result = process_pdf_for_rag(test_pdf_path)
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            query = "SELECT * FROM documents WHERE content_hash = :hash LIMIT 1"
+            result = self.mysql_manager.execute_query(query, {'hash': content_hash})
+            return result[0] if result else None
         except Exception as e:
-            print(f"测试失败: {str(e)}")
-    else:
-        print("请提供有效的PDF文件路径进行测试")
+            self.logger.error(f"获取文件信息失败: {str(e)}")
+            return None
+    
+    def get_file_info(self, file_id: int) -> Optional[Dict[str, Any]]:
+        """
+        获取文件信息
+        
+        Args:
+            file_id: 文件ID
+            
+        Returns:
+            Optional[Dict[str, Any]]: 文件信息
+        """
+        try:
+            query = "SELECT * FROM documents WHERE id = :file_id"
+            result = self.mysql_manager.execute_query(query, {'file_id': file_id})
+            
+            if result:
+                file_info = result[0]
+                # 解析元数据
+                if file_info.get('metadata'):
+                    file_info['metadata'] = json.loads(file_info['metadata'])
+                return file_info
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"获取文件信息失败: {str(e)}")
+            return None
+    
+    def get_file_list(self, page: int = 1, page_size: int = 20, 
+                     file_type: Optional[str] = None, 
+                     process_status: Optional[str] = None) -> Dict[str, Any]:
+        """
+        获取文件列表
+        
+        Args:
+            page: 页码
+            page_size: 每页数量
+            file_type: 文件类型过滤
+            process_status: 处理状态过滤
+            
+        Returns:
+            Dict[str, Any]: 文件列表和分页信息
+        """
+        try:
+            # 构建查询条件
+            where_conditions = []
+            params = {}
+            
+            if file_type:
+                where_conditions.append("file_type = :file_type")
+                params['file_type'] = file_type
+            
+            if process_status:
+                where_conditions.append("process_status = :process_status")
+                params['process_status'] = process_status
+            
+            where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+            
+            # 计算总数
+            count_query = f"SELECT COUNT(*) as total FROM documents WHERE {where_clause}"
+            count_result = self.mysql_manager.execute_query(count_query, params)
+            total = count_result[0]['total'] if count_result else 0
+            
+            # 计算偏移量
+            offset = (page - 1) * page_size
+            params['limit'] = page_size
+            params['offset'] = offset
+            
+            # 查询文件列表
+            list_query = f"""
+            SELECT id, filename, file_type, file_size, upload_time, process_status
+            FROM documents 
+            WHERE {where_clause}
+            ORDER BY upload_time DESC
+            LIMIT :limit OFFSET :offset
+            """
+            
+            files = self.mysql_manager.execute_query(list_query, params)
+            
+            return {
+                'files': files,
+                'total': total,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': (total + page_size - 1) // page_size
+            }
+            
+        except Exception as e:
+            self.logger.error(f"获取文件列表失败: {str(e)}")
+            return {
+                'files': [],
+                'total': 0,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': 0
+            }
+    
+    def update_file_status(self, file_id: int, status: str, process_time: Optional[datetime] = None) -> bool:
+        """
+        更新文件处理状态
+        
+        Args:
+            file_id: 文件ID
+            status: 新状态
+            process_time: 处理时间
+            
+        Returns:
+            bool: 更新成功返回True
+        """
+        try:
+            update_data = {'process_status': status}
+            if process_time:
+                update_data['process_time'] = process_time
+            else:
+                update_data['process_time'] = datetime.now()
+            
+            success = self.mysql_manager.update_data(
+                'documents',
+                update_data,
+                'id = :file_id',
+                {'file_id': file_id}
+            )
+            
+            if success:
+                self.logger.info(f"文件状态更新成功，ID: {file_id}, 状态: {status}")
+            
+            return success
+            
+        except Exception as e:
+            self.logger.error(f"更新文件状态失败: {str(e)}")
+            return False
+    
+    def delete_file(self, file_id: int) -> bool:
+        """
+        删除文件
+        
+        Args:
+            file_id: 文件ID
+            
+        Returns:
+            bool: 删除成功返回True
+        """
+        try:
+            # 获取文件信息
+            file_info = self.get_file_info(file_id)
+            if not file_info:
+                return False
+            
+            # 删除物理文件
+            if os.path.exists(file_info['file_path']):
+                os.remove(file_info['file_path'])
+                self.logger.info(f"删除物理文件: {file_info['file_path']}")
+            
+            # 删除数据库记录
+            success = self.mysql_manager.delete_data(
+                'documents',
+                'id = :file_id',
+                {'file_id': file_id}
+            )
+            
+            if success:
+                self.logger.info(f"文件删除成功，ID: {file_id}")
+            
+            return success
+            
+        except Exception as e:
+            self.logger.error(f"删除文件失败: {str(e)}")
+            return False
+    
+    def get_file_stats(self) -> Dict[str, Any]:
+        """
+        获取文件统计信息
+        
+        Returns:
+            Dict[str, Any]: 统计信息
+        """
+        try:
+            queries = {
+                'total_files': "SELECT COUNT(*) as count FROM documents",
+                'total_size': "SELECT SUM(file_size) as size FROM documents",
+                'by_type': """
+                    SELECT file_type, COUNT(*) as count, SUM(file_size) as size
+                    FROM documents 
+                    GROUP BY file_type
+                """,
+                'by_status': """
+                    SELECT process_status, COUNT(*) as count
+                    FROM documents 
+                    GROUP BY process_status
+                """
+            }
+            
+            stats = {}
+            for key, query in queries.items():
+                result = self.mysql_manager.execute_query(query)
+                if key in ['total_files', 'total_size']:
+                    stats[key] = result[0][list(result[0].keys())[0]] if result else 0
+                else:
+                    stats[key] = result
+            
+            return stats
+            
+        except Exception as e:
+            self.logger.error(f"获取文件统计信息失败: {str(e)}")
+            return {}
+    
+    def cleanup_temp_files(self, max_age_hours: int = 24) -> int:
+        """
+        清理临时文件
+        
+        Args:
+            max_age_hours: 最大保留时间（小时）
+            
+        Returns:
+            int: 清理的文件数量
+        """
+        try:
+            temp_folder = self.file_config['temp_folder']
+            if not os.path.exists(temp_folder):
+                return 0
+            
+            current_time = datetime.now()
+            max_age_seconds = max_age_hours * 3600
+            cleaned_count = 0
+            
+            for filename in os.listdir(temp_folder):
+                file_path = os.path.join(temp_folder, filename)
+                if os.path.isfile(file_path):
+                    file_age = current_time.timestamp() - os.path.getmtime(file_path)
+                    if file_age > max_age_seconds:
+                        os.remove(file_path)
+                        cleaned_count += 1
+                        self.logger.info(f"清理临时文件: {filename}")
+            
+            self.logger.info(f"临时文件清理完成，共清理{cleaned_count}个文件")
+            return cleaned_count
+            
+        except Exception as e:
+            self.logger.error(f"清理临时文件失败: {str(e)}")
+            return 0

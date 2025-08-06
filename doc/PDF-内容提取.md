@@ -1,0 +1,5 @@
+1.使用Unstructured库重构当前PdfExtractService.py的实现
+2.入参和现在保持不变，返回Unstructured库读取的所有内容构建的json数据
+3.Unstructured的所有配置项需要在Unstructured.yaml中可配置
+4.PdfExtractService.py这个文件只实现pdf内容的提取，不要实现其他内容
+5.不要扩散思维，严格按照上面要求实现

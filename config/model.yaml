@@ -1,52 +1,41 @@
 # 模型配置文件
-# 包含项目全局用到的所有模型配置
+# 配置项目中使用的所有AI模型相关信息
 
 # DeepSeek大语言模型配置
 deepseek:
-  api_url: https://api.deepseek.com
-  api_key: sk-27e712e3a6c64533884adc0ad040ff3b
-  model_name: deepseek-chat
-  # API请求配置
-  timeout: 60
-  max_tokens: 4096
-  temperature: 0.7
-  # 重试配置
-  max_retries: 3
-  retry_delay: 1
+  api_url: "https://api.deepseek.com"           # DeepSeek API地址
+  api_key: "sk-27e712e3a6c64533884adc0ad040ff3b"  # DeepSeek API密钥
+  model_name: "deepseek-chat"                   # 使用的模型名称
+  max_tokens: 4096                              # 最大生成token数
+  temperature: 0.7                              # 生成温度，控制随机性(0-1)
+  top_p: 0.9                                    # 核采样参数(0-1)
+  frequency_penalty: 0.0                        # 频率惩罚(-2.0到2.0)
+  presence_penalty: 0.0                         # 存在惩罚(-2.0到2.0)
+  timeout: 60                                   # 请求超时时间(秒)
+  retry_times: 3                                # 重试次数
+  retry_delay: 1                                # 重试延迟(秒)
 
 # 嵌入模型配置
 embedding:
-  model_name: paraphrase-multilingual-mpnet-base-v2
-  dimension: 768
-  # 模型路径配置
-  model_path: ./models/paraphrase-multilingual-mpnet-base-v2
-  # 推理配置
-  device: cpu
-  batch_size: 32
-  max_length: 512
+  model_name: "paraphrase-multilingual-mpnet-base-v2"  # 嵌入模型名称
+  dimension: 768                                        # 向量维度
+  max_length: 512                                      # 最大输入长度
+  batch_size: 32                                       # 批处理大小
+  normalize: true                                      # 是否归一化向量
+  device: "cpu"                                        # 使用设备(cpu/cuda)
+  cache_dir: "./models"                                # 模型缓存目录
+  
+  # 文本预处理配置
+  preprocessing:
+    clean_text: true                                   # 是否清理文本
+    lowercase: false                                   # 是否转小写
+    remove_special_chars: false                        # 是否移除特殊字符
+    max_chunk_size: 500                               # 文本分块最大大小
+    chunk_overlap: 50                                 # 分块重叠大小
 
-# PDF处理相关模型配置
-pdf_processing:
-  # OCR模型配置（PaddleOCR）
-  ocr:
-    model_name: paddleocr
-    language: ch                    # 中文识别
-    use_angle_cls: true            # 启用角度分类
-    use_gpu: false                 # 使用GPU加速（根据环境配置）
-    show_log: false                # 显示详细日志
-    
-  # 图像理解模型配置
-  image_understanding:
-    model_name: blip2              # 图像理解模型
-    max_description_length: 500    # 图像描述最大长度
-    compression_quality: 85        # 图像压缩质量
-    
-  # 表格检测模型配置
-  table_detection:
-    model_name: table-transformer  # 表格检测模型
-    max_embed_rows: 50            # 嵌入的最大行数
-    
-  # 布局检测模型配置
-  layout_detection:
-    model_name: yolox             # 布局检测模型（Unstructured使用）
-    strategy: hi_res              # 高分辨率策略 
+# 模型通用配置
+general:
+  model_cache_size: 100                               # 模型缓存大小(MB)
+  enable_gpu: false                                   # 是否启用GPU
+  log_level: "INFO"                                   # 日志级别(DEBUG/INFO/WARNING/ERROR)
+  performance_monitoring: true                        # 是否启用性能监控

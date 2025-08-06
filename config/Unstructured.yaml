@@ -1,0 +1,137 @@
+# Unstructured库配置文件
+# 配置Unstructured库的所有参数和选项
+
+# 基础配置
+basic:
+  # 输出模式配置
+  output_format: "application/json"     # 输出格式 (application/json, text/plain, text/html, etc.)
+  encoding: "utf-8"                     # 文本编码
+  
+  # 分割策略配置
+  chunking_strategy: "by_title"         # 分块策略 (by_title, basic, by_page, by_similarity, None)
+  max_characters: 1000                  # 最大字符数
+  new_after_n_chars: 800               # 多少字符后创建新块
+  overlap: 200                         # 重叠字符数
+  overlap_all: false                   # 是否所有块都重叠
+  
+  # 坐标系统配置
+  coordinates: true                     # 是否包含坐标信息
+  xml_keep_tags: false                 # 是否保留XML标签
+
+# PDF处理特定配置
+pdf:
+  # 提取策略
+  strategy: "auto"                      # 提取策略 (auto, fast, ocr_only, hi_res)
+  hi_res_model_name: "yolox"           # 高分辨率模型名称 (可选: yolox-s, yolox-m, yolox-l, yolox-x, yolox-nano, yolox-tiny)
+  
+  # OCR配置
+  ocr_languages: ["chi_sim", "eng"]    # OCR语言列表
+  pdf_infer_table_structure: true      # 是否推断表格结构
+  pdf_extract_images: true             # 是否提取图片
+  pdf_extract_image_bbox: true         # 是否提取图片边界框
+  pdf_image_output_dir_path: ./upload/images      # 图片输出目录路径，null表示不保存
+  pdf_json_output_dir_path: ./upload/json         # JSON数据输出目录路径，null表示不保存
+  
+  # 表格处理
+  extract_tables: true                 # 是否提取表格
+  table_extraction_method: "unstructured" # 表格提取方法
+  
+  # 页面处理
+  starting_page_number: null           # 起始页码，null表示从第一页开始
+  ending_page_number: null             # 结束页码，null表示到最后一页
+
+# 内容过滤配置
+filtering:
+  # 元素类型过滤
+  include_page_breaks: true           # 是否包含分页符
+  include_metadata: true               # 是否包含元数据
+  
+  # 内容过滤
+  skip_infer_table_types: []          # 跳过推断的表格类型
+  languages: ["zh", "en"]             # 处理的语言列表
+  
+  # 文本清理
+  clean_non_ascii_chars: false        # 是否清理非ASCII字符
+  clean_extra_whitespace: true        # 是否清理多余空白
+  group_broken_paragraphs: true       # 是否合并断开的段落
+
+# 性能配置
+performance:
+  # 多线程配置
+  multiprocessing: false              # 是否启用多进程
+  num_processes: 2                    # 进程数量
+  
+  # 内存管理
+  max_partition: null                 # 最大分区数，null表示无限制
+  
+  # 缓存配置
+  cache_dir: "./temp/unstructured_cache" # 缓存目录
+  skip_download: false                # 是否跳过下载
+
+# 输出配置
+output:
+  # 元数据包含配置
+  include_orig_elements: false        # 是否包含原始元素
+  sort_mode: "xy-cut"                 # 排序模式 (xy-cut, basic, dont-sort)
+  
+  # 数据结构配置
+  combine_under_n_chars: 0            # 合并小于N字符的元素
+  date_from_file_object: false       # 是否从文件对象获取日期
+  
+  # 输出格式特定配置
+  flatten_metadata: false             # 是否展平元数据
+  metadata_include: ["filename", "file_directory", "last_modified", "page_number", "filetype"]
+  metadata_exclude: []                # 排除的元数据字段
+
+# 模型配置
+models:
+  # 深度学习模型配置
+  model_name: "yolox"                 # 检测模型名称
+  
+  # HuggingFace模型配置
+  hf_token: null                      # HuggingFace token，如果需要的话
+  
+  # 布局检测配置
+  detect_document_layout: true        # 是否检测文档布局
+  
+# 错误处理配置
+error_handling:
+  # 重试配置
+  retry_attempts: 3                   # 重试次数
+  retry_delay: 1                      # 重试延迟（秒）
+  
+  # 错误处理策略
+  skip_errors: false                  # 是否跳过错误
+  raise_on_error: true               # 是否在错误时抛出异常
+  
+  # 日志配置
+  log_level: "INFO"                   # 日志级别
+  verbose: false                      # 是否详细输出
+
+# 扩展配置
+extensions:
+  # 自定义处理器
+  custom_processors: []               # 自定义处理器列表
+  
+  # 插件配置
+  plugins: []                         # 插件列表
+  
+  # 实验性功能
+  experimental_features:
+    enable_new_table_extraction: false # 启用新的表格提取功能
+    enable_formula_extraction: false   # 启用公式提取功能
+    enable_header_footer_detection: true # 启用页眉页脚检测
+
+# 调试配置
+debug:
+  save_intermediate_results: false    # 是否保存中间结果
+  debug_output_dir: "./logs/unstructured_debug" # 调试输出目录
+  profile_performance: false          # 是否性能分析
+  
+# 兼容性配置
+compatibility:
+  # 向后兼容
+  legacy_mode: false                  # 是否启用遗留模式
+  
+  # API版本
+  api_version: "latest"               # API版本
