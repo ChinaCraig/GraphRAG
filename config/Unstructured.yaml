@@ -21,7 +21,7 @@ basic:
 # PDF处理特定配置
 pdf:
   # 提取策略
-  strategy: "auto"                      # 提取策略 (auto, fast, ocr_only, hi_res)
+  strategy: "hi_res"                      # 提取策略 (auto, fast, ocr_only, hi_res)
   hi_res_model_name: "yolox"           # 高分辨率模型名称 (可选: yolox-s, yolox-m, yolox-l, yolox-x, yolox-nano, yolox-tiny)
   
   # OCR配置
