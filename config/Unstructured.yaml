@@ -32,6 +32,14 @@ pdf:
   pdf_image_output_dir_path: ./upload/images      # 图片输出目录路径，null表示不保存
   pdf_json_output_dir_path: ./upload/json         # JSON数据输出目录路径，null表示不保存
   
+  # 图片命名配置
+  image_naming:
+    pattern: "{doc_name}_page{page:03d}_img{index:02d}_{timestamp}"  # 命名模式
+    timestamp_format: "%Y%m%d_%H%M%S"    # 时间戳格式
+    include_coordinates: true             # 是否在文件名中包含坐标信息
+    include_hash: false                  # 是否包含内容哈希（防重复）
+    max_filename_length: 100             # 文件名最大长度
+  
   # 表格处理
   extract_tables: true                 # 是否提取表格
   table_extraction_method: "unstructured" # 表格提取方法
