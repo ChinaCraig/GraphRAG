@@ -30,7 +30,7 @@ embedding:
     clean_text: true                                   # 是否清理文本
     lowercase: false                                   # 是否转小写
     remove_special_chars: false                        # 是否移除特殊字符
-    max_chunk_size: 500                               # 文本分块最大大小
+    max_chunk_size: 2000                               # 文本分块最大大小
     chunk_overlap: 50                                 # 分块重叠大小
 
 # 模型通用配置

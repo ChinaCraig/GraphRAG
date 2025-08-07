@@ -7,3 +7,10 @@
 2.严格按照上述的总体目标设计并实现知识图谱功能，在PdfGraphService.py这个文件中实现知识图谱的所有内容
 3.向量化数据库和图数据库已经存在对应的管理器，不要重复实现
 4.严格按照这个要求实现，不要扩散思路和需求
+
+
+优化：
+数据提取阶段产生的json数据中包含id，并且这个id已经将“一家子”关联在一起，内容都通过parent_id绑定title。向量化产生的content_units没有包含element_id，这个element_id应该用title的id，保证每个content_units都是“一家子”，同时在这个阶段需要产生这“一家子”的结构化数据，保存到mysql中，用来在召回的时候，能准确拿到图片、图表、表格等详细信息。如果要实现这个功能需要做以下调整：
+1.调整向量数据库的结构，增加“element_id”，用来保存“一家子”的唯一id
+2.调整content_units，增加element_id，这个element_id的值是“这家子”的title的id，增加table、img、chars标签，保留表格、图片、图表的详细信息（表格结构、图片路径等），table、img、chars这三个标签在向量化时没有用，它是为了其他功能准备的，同时保证产生的json中也要包含新加的这些内容
+3.调整document_chunks的结构，增加element_id，当完成一个content_units的向量化操作后，将这个content_units保存到document_chunks表其中content就用来保存这个content_units的json数据

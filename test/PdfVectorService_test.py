@@ -28,7 +28,7 @@ def test_pdf_vectorization():
     # 手动修改以下参数进行测试
     
     # JSON文件路径（相对于项目根目录）
-    json_file_path = "upload/json/20240906-CHO试剂盒单页_doc_1_hi_res.json"
+    json_file_path = "upload/json/20240906-CHO试剂盒单页_doc_1.json"
     
     # 文档ID（用于数据库存储）
     document_id = 1

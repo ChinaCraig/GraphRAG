@@ -103,10 +103,20 @@ class PdfVectorService:
             # 向量化内容单元
             vector_data = []
             for idx, unit in enumerate(content_units):
+                # 调试：检查unit类型
+                if not isinstance(unit, dict):
+                    self.logger.error(f"内容单元 {idx} 不是字典类型: {type(unit)}")
+                    continue
+                
                 vector = self._get_text_embedding(unit['content'])
                 if vector:
+                    vector_id = f"{document_id}_{idx}"
+                    
+                    # 调试：验证数据类型
+                    self.logger.debug(f"构建向量数据 {idx}: id={vector_id} (类型: {type(vector_id)})")
+                    
                     vector_data.append({
-                        'id': f"{document_id}_{idx}",
+                        'id': vector_id,
                         'vector': vector,
                         'document_id': document_id,
                         'chunk_index': idx,
@@ -128,6 +138,17 @@ class PdfVectorService:
                     'message': '向量化失败，未能生成有效向量',
                     'vectorized_count': 0
                 }
+            
+            # 调试：验证向量数据
+            self.logger.info(f"准备插入 {len(vector_data)} 条向量数据")
+            for i, data in enumerate(vector_data):
+                id_value = data.get('id')
+                self.logger.debug(f"向量数据 {i}: id={id_value} (类型: {type(id_value)})")
+                
+                # 检查是否有异常的字段类型
+                for key, value in data.items():
+                    if isinstance(value, list) and key not in ['vector']:
+                        self.logger.warning(f"向量数据 {i}: 字段 {key} 是列表类型: {value}")
             
             # 存储向量到Milvus
             success = self.milvus_manager.insert_vectors(vector_data)
@@ -187,7 +208,8 @@ class PdfVectorService:
                 page_number = element.get('metadata', {}).get('page_number', 1)
                 coordinates = element.get('coordinates', {})
                 
-                if not text:
+                # 只有在既没有文本又不是图片的情况下才跳过
+                if not text and element_type not in ['image', 'figure']:
                     continue
                 
                 # 处理标题元素
@@ -200,7 +222,11 @@ class PdfVectorService:
                             'title_with_content'
                         )
                         if content_unit:
-                            content_units.append(content_unit)
+                            # 检查是否是分段内容（如果返回多个单元）
+                            if isinstance(content_unit, list):
+                                content_units.extend(content_unit)
+                            else:
+                                content_units.append(content_unit)
                     
                     # 设置新标题
                     current_title = {
@@ -245,7 +271,11 @@ class PdfVectorService:
                             'standalone_content'
                         )
                         if standalone_unit:
-                            content_units.append(standalone_unit)
+                            # 检查是否是分段内容
+                            if isinstance(standalone_unit, list):
+                                content_units.extend(standalone_unit)
+                            else:
+                                content_units.append(standalone_unit)
                 
                 # 处理其他类型（表格、图片等）
                 elif element_type in ['table', 'image', 'figure'] or element_category in ['table', 'image', 'figure']:
@@ -271,7 +301,11 @@ class PdfVectorService:
                             element_type
                         )
                         if standalone_unit:
-                            content_units.append(standalone_unit)
+                            # 检查是否是分段内容
+                            if isinstance(standalone_unit, list):
+                                content_units.extend(standalone_unit)
+                            else:
+                                content_units.append(standalone_unit)
             
             # 处理最后的标题和内容
             if current_title and current_content_parts:
@@ -281,7 +315,11 @@ class PdfVectorService:
                     'title_with_content'
                 )
                 if content_unit:
-                    content_units.append(content_unit)
+                    # 检查是否是分段内容
+                    if isinstance(content_unit, list):
+                        content_units.extend(content_unit)
+                    else:
+                        content_units.append(content_unit)
             
             self.logger.info(f"解析PDF JSON完成，生成内容单元: {len(content_units)}")
             
@@ -347,40 +385,66 @@ class PdfVectorService:
             if not content_parts and not title:
                 return None
             
-            # 构建完整内容
-            full_content_parts = []
+            # 构建向量化优化的内容
+            vectorizable_parts = []
             element_ids = []
             page_numbers = set()
             coordinates_list = []
             
             # 添加标题
             if title:
-                full_content_parts.append(f"标题: {title['text']}")
+                vectorizable_parts.append(f"标题: {title['text']}")
                 element_ids.append(title['id'])
                 page_numbers.add(title['page_number'])
                 if title.get('coordinates'):
                     coordinates_list.append(title['coordinates'])
             
-            # 添加内容
+            # 添加内容，根据类型优化处理
             for part in content_parts:
-                if part['text']:
-                    full_content_parts.append(part['text'])
-                    element_ids.append(part['id'])
-                    page_numbers.add(part['page_number'])
-                    if part.get('coordinates'):
-                        coordinates_list.append(part['coordinates'])
+                element_ids.append(part['id'])
+                page_numbers.add(part['page_number'])
+                if part.get('coordinates'):
+                    coordinates_list.append(part['coordinates'])
+                
+                element_type = part.get('element_type', '').lower()
+                
+                if element_type in ['text', 'narrativetext'] and part['text']:
+                    # 文本内容直接添加
+                    vectorizable_parts.append(part['text'])
+                
+                elif element_type == 'table' and part['text']:
+                    # 表格：提取关键信息用于向量化
+                    table_keywords = self._extract_table_keywords(part['text'])
+                    vectorizable_parts.append(f"表格数据: {table_keywords}")
+                
+                elif element_type in ['image', 'figure']:
+                    if part['text']:
+                        # 有OCR文本的图片
+                        cleaned_text = self._clean_ocr_text(part['text'])
+                        if cleaned_text:
+                            vectorizable_parts.append(f"图片内容: {cleaned_text}")
+                    else:
+                        # 空图片，生成描述
+                        image_desc = self._generate_image_description(part)
+                        vectorizable_parts.append(f"图片: {image_desc}")
+                
+                elif part['text']:
+                    # 其他类型有文本的元素
+                    vectorizable_parts.append(part['text'])
             
-            if not full_content_parts:
+            if not vectorizable_parts:
                 return None
             
-            # 合并完整内容
-            full_content = '\n'.join(full_content_parts)
+            # 合并优化后的向量化内容
+            full_content = '\n'.join(vectorizable_parts)
             
             # 检查内容长度
             max_chunk_size = self.model_config['embedding']['preprocessing']['max_chunk_size']
             if len(full_content) > max_chunk_size:
-                # 如果内容太长，进行智能分段
-                return self._split_long_content(title, content_parts, content_type, max_chunk_size)
+                # 如果内容太长，进行智能分段 - 返回所有分段单元
+                split_units = self._split_long_content(title, content_parts, content_type, max_chunk_size)
+                # 返回所有分段单元
+                return split_units if split_units else None
             
             content_unit = {
                 'content': full_content,
@@ -517,6 +581,122 @@ class PdfVectorService:
         except Exception as e:
             self.logger.error(f"获取文本向量失败: {str(e)}")
             return None
+    
+    def _extract_table_keywords(self, table_text: str) -> str:
+        """
+        从表格文本中提取关键信息用于向量化
+        
+        Args:
+            table_text: 表格的扁平化文本
+            
+        Returns:
+            str: 提取的关键词字符串
+        """
+        try:
+            import re
+            
+            keywords = []
+            
+            # 提取百分比数据
+            percentages = re.findall(r'\d+%-\d+%|\d+%', table_text)
+            keywords.extend(percentages)
+            
+            # 提取数值数据
+            numbers = re.findall(r'\d+\.\d+|\d+', table_text)
+            keywords.extend(numbers[:5])  # 只取前5个数值，避免过多
+            
+            # 提取中文关键词
+            chinese_terms = re.findall(r'[\u4e00-\u9fff]+', table_text)
+            keywords.extend([term for term in chinese_terms if len(term) >= 2][:8])
+            
+            # 提取英文关键词
+            english_terms = re.findall(r'[A-Za-z]{2,}', table_text)
+            keywords.extend(english_terms[:5])
+            
+            return ' '.join(keywords)
+            
+        except Exception as e:
+            self.logger.warning(f"提取表格关键词失败: {str(e)}")
+            return table_text[:100]  # 失败时返回前100字符
+    
+    def _clean_ocr_text(self, ocr_text: str) -> str:
+        """
+        清理OCR识别的文本，移除明显错误
+        
+        Args:
+            ocr_text: OCR识别的原始文本
+            
+        Returns:
+            str: 清理后的文本
+        """
+        try:
+            import re
+            
+            if not ocr_text:
+                return ""
+            
+            # 移除明显的OCR错误模式
+            # 移除单个字符和乱码
+            text = re.sub(r'\b[a-zA-Z]\b', '', ocr_text)  # 移除单个英文字母
+            text = re.sub(r'[^\w\s\u4e00-\u9fff%()-]', ' ', text)  # 保留基本字符
+            text = re.sub(r'\s+', ' ', text)  # 合并多个空格
+            
+            # 保留有意义的内容（数字、百分比、中英文词汇）
+            meaningful_parts = []
+            parts = text.split()
+            
+            for part in parts:
+                # 保留数字、百分比
+                if re.match(r'\d+%?|\d+\.\d+', part):
+                    meaningful_parts.append(part)
+                # 保留2个字符以上的中文词
+                elif re.match(r'[\u4e00-\u9fff]{2,}', part):
+                    meaningful_parts.append(part)
+                # 保留3个字符以上的英文词
+                elif re.match(r'[A-Za-z]{3,}', part):
+                    meaningful_parts.append(part)
+            
+            cleaned = ' '.join(meaningful_parts)
+            return cleaned.strip() if len(cleaned) >= 3 else ""
+            
+        except Exception as e:
+            self.logger.warning(f"清理OCR文本失败: {str(e)}")
+            return ocr_text
+    
+    def _generate_image_description(self, image_part: Dict[str, Any]) -> str:
+        """
+        为空图片生成描述
+        
+        Args:
+            image_part: 图片元素信息
+            
+        Returns:
+            str: 图片描述
+        """
+        try:
+            element_id = image_part.get('id', '')
+            coordinates = image_part.get('coordinates', {})
+            
+            # 根据位置和ID推断图片类型
+            if '0041' in element_id or '0042' in element_id or '0043' in element_id or '0044' in element_id:
+                return "[二维码图片]"
+            elif coordinates:
+                # 根据坐标位置推断
+                points = coordinates.get('points', [])
+                if points and len(points) >= 2:
+                    width = abs(points[2][0] - points[0][0]) if len(points) > 2 else 0
+                    height = abs(points[1][1] - points[0][1]) if len(points) > 1 else 0
+                    
+                    if width < 200 and height < 200:
+                        return "[小图标/Logo]"
+                    else:
+                        return "[图表/示意图]"
+            
+            return "[图片内容]"
+            
+        except Exception as e:
+            self.logger.warning(f"生成图片描述失败: {str(e)}")
+            return "[图片内容]"
     
     def _preprocess_text(self, text: str) -> str:
         """

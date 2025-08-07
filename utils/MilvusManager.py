@@ -186,17 +186,44 @@ class MilvusManager:
                 return True
             
             # 准备插入数据
-            insert_data = {
-                "id": [item["id"] for item in data],
-                "vector": [item["vector"] for item in data],
-                "document_id": [item["document_id"] for item in data],
-                "chunk_index": [item["chunk_index"] for item in data],
-                "content": [item["content"] for item in data],
-                "metadata": [json.dumps(item.get("metadata", {}), ensure_ascii=False) for item in data]
-            }
+            ids = []
+            vectors = []
+            document_ids = []
+            chunk_indices = []
+            contents = []
+            metadatas = []
+            
+            for i, item in enumerate(data):
+                # 调试：检查每个字段的类型
+                item_id = item["id"]
+                if not isinstance(item_id, str):
+                    self.logger.error(f"数据项 {i}: id 不是字符串类型: {type(item_id)}, 值: {item_id}")
+                    raise ValueError(f"id字段必须是字符串，但收到: {type(item_id)}")
+                
+                ids.append(item_id)
+                vectors.append(item["vector"])
+                document_ids.append(item["document_id"])
+                chunk_indices.append(item["chunk_index"])
+                contents.append(item["content"])
+                metadatas.append(json.dumps(item.get("metadata", {}), ensure_ascii=False))
+            
+            # 使用实体列表方式插入（兼容性更好）
+            entities = [
+                ids,           # id字段
+                vectors,       # vector字段
+                document_ids,  # document_id字段
+                chunk_indices, # chunk_index字段
+                contents,      # content字段
+                metadatas      # metadata字段
+            ]
+            
+            # 调试：验证entities结构
+            self.logger.debug(f"entities长度: {len(entities)}")
+            self.logger.debug(f"id列表长度: {len(entities[0])}")
+            self.logger.debug(f"前3个id: {entities[0][:3]}")
             
             # 插入数据
-            self.collection.insert(insert_data)
+            self.collection.insert(entities)
             
             # 刷新数据，确保数据被持久化
             self.collection.flush()
