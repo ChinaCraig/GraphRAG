@@ -1,0 +1,894 @@
+[
+  {
+    "content": "标题: 产品说明\nCHO 细胞 HCP（宿主蛋白）残留检测试剂盒旨在对由中国仓鼠卵巢细胞 CHO-K1 细胞系生产生物制品的过程中带来的宿主细 胞蛋白 (HCP) 残留进行检测。特异性的抗体可以识别和检测 80% 以上的 HCP 分子，包括低分子量和高分子量的种类均可以被很好 地检测到。可用于 CHO-K1 表达系统的早期或晚期的过程开发和质量控制，该试剂盒可以在工艺开发过程中来监测 HCP 的去除，以 及产品的质量检测和放行。",
+    "content_type": "title_with_content",
+    "title": "产品说明",
+    "page_number": 2,
+    "element_id": "1_0004",
+    "element_ids": [
+      "1_0004",
+      "1_0005"
+    ],
+    "hierarchy_info": {
+      "title_level": 1,
+      "hierarchy_depth": 1
+    },
+    "coordinates": {
+      "points": [
+        [
+          114.31388888888888,
+          138.21051025390625
+        ],
+        [
+          114.31388888888888,
+          170.11439514160156
+        ],
+        [
+          225.42499999999995,
+          170.11439514160156
+        ],
+        [
+          225.42499999999995,
+          138.21051025390625
+        ]
+      ],
+      "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9ec90>"
+    },
+    "table": [],
+    "img": [],
+    "chars": []
+  },
+  {
+    "content": "标题: 应用范围\n多宁生物 HCP 检测试剂盒采用一步酶联免疫 ELISA 法。含有 HCP 的样品可以与 HRP 标记的山羊抗 CHO-K1 抗体以及包被在 酶标板上抗 CHO-K1 抗体同时反应。最终形成一种夹心复合物的固相抗体 -HCP- 标记抗体。通过清洗酶标板可以去除未结合的抗原 抗体。向孔中加入 TMB 底物充分反应后，加入终止液停止显色，用酶标仪读取反应溶液在 450nm 以及 650nm 处的 OD 值。OD 450nm ‒ OD 650nm 的数值与溶液中的 HCP 含量正向相关，可以根据标准曲线计算出溶液中的 HCP 浓度。",
+    "content_type": "title_with_content",
+    "title": "应用范围",
+    "page_number": 2,
+    "element_id": "1_0006",
+    "element_ids": [
+      "1_0006",
+      "1_0007"
+    ],
+    "hierarchy_info": {
+      "title_level": 1,
+      "hierarchy_depth": 1
+    },
+    "coordinates": {
+      "points": [
+        [
+          114.31388888888888,
+          421.811111111111
+        ],
+        [
+          114.31388888888888,
+          452.8634338378906
+        ],
+        [
+          225.42499999999995,
+          452.8634338378906
+        ],
+        [
+          225.42499999999995,
+          421.811111111111
+        ]
+      ],
+      "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9e790>"
+    },
+    "table": [],
+    "img": [],
+    "chars": []
+  },
+  {
+    "content": "标题: 产品特点\n· 更高的覆盖率 81% （使用 2D Gel/Western Blot 检测）：多宁生物 HCP 检测试剂盒所使用的检测抗体，对于不同大小，不同等 电点的宿主细胞蛋白均有更加广泛的识别效率。经过 2D 电泳和 Western Blot 检测，覆盖率可达 80% 以上。\n图片内容: CHO细胞宿主蛋白检测试剂盒(即用型)",
+    "content_type": "title_with_content",
+    "title": "产品特点",
+    "page_number": 2,
+    "element_id": "1_0008",
+    "element_ids": [
+      "1_0008",
+      "1_0009",
+      "1_0010"
+    ],
+    "hierarchy_info": {
+      "title_level": 1,
+      "hierarchy_depth": 1
+    },
+    "coordinates": {
+      "points": [
+        [
+          112.12348937988281,
+          705.1444444444444
+        ],
+        [
+          112.12348937988281,
+          736.8079223632812
+        ],
+        [
+          225.42499999999995,
+          736.8079223632812
+        ],
+        [
+          225.42499999999995,
+          705.1444444444444
+        ]
+      ],
+      "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9d390>"
+    },
+    "table": [],
+    "img": [
+      {
+        "element_id": "1_0010",
+        "ocr_text": "CHO细胞宿主蛋白检测试剂盒(即用型)",
+        "coordinates": {
+          "points": [
+            [
+              358.92777777777775,
+              822.6138888888887
+            ],
+            [
+              358.92777777777775,
+              1564.611111111111
+            ],
+            [
+              1348.2583333333332,
+              1564.611111111111
+            ],
+            [
+              1348.2583333333332,
+              822.6138888888887
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9e110>"
+        },
+        "page_number": 2,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page002_img01_20250807_101528_pos358x822.jpg",
+        "image_type": "general",
+        "description": "[图表/示意图]"
+      }
+    ],
+    "chars": []
+  },
+  {
+    "content": "标题: 案例分享\n· 图中蓝框内是多宁抗体和市面上主流试剂盒中的抗体共同识别的宿主细胞蛋白斑点，而红框则为多宁抗体提供的额外的识别 宿主细胞蛋白斑点。\n图片内容: BTHCP Mit\n图片内容: ERPIRENCP MAGE\n01\n对于 CHO-K1 宿主细胞蛋白的测量表明，多宁生物 HCP 检测试剂盒在广泛的范围内（3ng/mL - 100ng/mL）都具有 良好的线性。\n图片内容: Example Standard Curve 1s 1 pee 0 100 Concentration BPH tite\n图片内容: Example Standard Curve 4 7 Concentration ERAREHC HME\n图片内容: 1s 4 1 pee 7 0 100 Concentration Concentration BPH tite ERAREHC HME\n表格数据: 87%-93% 97%-106% 92%-102% 20 7.4 100 17.9 87 缓冲液系统 加标 标准样品的实测浓度 回收率 ng ml HCP ng ml\n·具有良好的精密度和准确性 ：\n在低、中、高三种不同样品浓度考察试剂盒的重复性和精密度，结果表明试剂盒在不同浓度的条件下，重复性和准确性良 好，可以满足检测的质控标准。\n表格数据: 16% 10% 70%-105% 6% 6% 92%-114% 5% 4% 93%-107% 4 12 12 3 16 重复性 中间精密度 准确性 项目 RSD RSD Recovery ng mL\n· 具有良好的灵敏度和最低定量限：\n在最低定量限处 (3ng/mL) 对试剂盒的操作指标进行考察，结果表明在最低定量限处试剂盒仍具有良好的信噪比，精 密度和准确性。\n表格数据: 2% 0%-4% 95% 90%-96% 6 6 7.8 7.1 8.3 平均值 范围 项目 信噪比 精密度 准确度",
+    "content_type": "title_with_content",
+    "title": "案例分享",
+    "page_number": 2,
+    "element_id": "1_0014",
+    "element_ids": [
+      "1_0014",
+      "1_0015",
+      "1_0016",
+      "1_0017",
+      "1_0018",
+      "1_0022",
+      "1_0023",
+      "1_0024",
+      "1_0025",
+      "1_0027",
+      "1_0028",
+      "1_0029",
+      "1_0030",
+      "1_0031",
+      "1_0032",
+      "1_0033"
+    ],
+    "hierarchy_info": {
+      "title_level": 1,
+      "hierarchy_depth": 1
+    },
+    "coordinates": {
+      "points": [
+        [
+          115.87222222222222,
+          1604.4644775390625
+        ],
+        [
+          115.87222222222222,
+          1640.9468994140625
+        ],
+        [
+          227.05125427246094,
+          1640.9468994140625
+        ],
+        [
+          227.05125427246094,
+          1604.4644775390625
+        ]
+      ],
+      "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9d090>"
+    },
+    "table": [
+      {
+        "element_id": "1_0027",
+        "raw_text": "缓冲液系统 加标 20ng/ml HCP 标准样品的实测浓度（ng/ml） 回收率（%） PBS buﬀer,pH7.4/Triton X-100 17.9 87%-93% Histidine buﬀer pH 6.0/PS80 20.3 97%-106% Histidine buﬀer pH 6.0/Sucrose and PS 80 19.4 92%-102%",
+        "coordinates": {
+          "points": [
+            [
+              168.22500610351562,
+              837.7420043945312
+            ],
+            [
+              168.22500610351562,
+              1116.1304931640625
+            ],
+            [
+              1432.582275390625,
+              1116.1304931640625
+            ],
+            [
+              1432.582275390625,
+              837.7420043945312
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9c2d0>"
+        },
+        "page_number": 3,
+        "table_type": "recovery_rate",
+        "structured_html": "<table><thead><th rowspan=\"2\">缓冲 液 系统 PBS buffer,pH7.4/Triton X-100</th><th>加 标 20ng/ml</th><th>HCP 标准 样品 的 实测 浓度 (ng/ml)</th><th rowspan=\"2\">可 WHE (%) 87%-93%</th></thead><thead><th></th><th></th><th>17.9</th><th></th></thead><tr><td>Histidine buffer pH 6.0/PS80</td><td></td><td>20.3</td><td>97%-106%</td></tr><tr><td>Histidine buffer pH 6.0/Sucrose and PS 80</td><td></td><td>19.4</td><td>92%-102%</td></tr></table>",
+        "parsed_data": {
+          "headers": [
+            "缓冲液系统",
+            "实测浓度(ng/ml)",
+            "回收率(%)"
+          ],
+          "rows": [
+            [
+              "PBS buffer,pH7.4/Triton X-100",
+              "17.9",
+              "87%-93%"
+            ],
+            [
+              "Histidine buffer pH 6.0/PS80",
+              "20.3",
+              "97%-106%"
+            ],
+            [
+              "Histidine buffer pH 6.0/Sucrose and PS 80",
+              "19.4",
+              "92%-102%"
+            ]
+          ]
+        }
+      },
+      {
+        "element_id": "1_0030",
+        "raw_text": "重复性 中间精密度 准确性 项目 (RSD%,n=4) （RSD%,n=12） （%Recovery，n=12） 低（3 ng/mL） <16% 10% 70%-105% 中（12 ng/mL） <6% 6% 92%-114% 高（75 ng/mL） <5% 4% 93%-107%",
+        "coordinates": {
+          "points": [
+            [
+              147.75856018066406,
+              1311.203125
+            ],
+            [
+              147.75856018066406,
+              1593.799072265625
+            ],
+            [
+              1429.7135009765625,
+              1593.799072265625
+            ],
+            [
+              1429.7135009765625,
+              1311.203125
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9eb50>"
+        },
+        "page_number": 3,
+        "table_type": "precision_data",
+        "structured_html": "<table><thead><th>mB</th><th>重复 性 (RSD%,n=4)</th><th>中 间 精 密度 (RSD%,n=12)</th><th>准确 性 (%Recovery, n=12)</th></thead><tr><td>氏 (3 ng/mL)</td><td>&lt;16%</td><td>10%</td><td>70%-105%</td></tr><tr><td>中 (12 ng/mL)</td><td>&lt;6%</td><td>6%</td><td>92%-114%</td></tr><tr><td>高 (75 ng/mL)</td><td>&lt;5%</td><td>4%</td><td>93%-107%</td></tr></table>",
+        "parsed_data": {
+          "headers": [],
+          "rows": []
+        }
+      },
+      {
+        "element_id": "1_0033",
+        "raw_text": "平均值（n=6） 范围（n=6） 项目 7.8 7.1-8.3 信噪比 2% 0%-4% 精密度（%） 95% 90%-96% 准确度（%）",
+        "coordinates": {
+          "points": [
+            [
+              156.63352966308594,
+              1772.71728515625
+            ],
+            [
+              156.63352966308594,
+              1963.8857421875
+            ],
+            [
+              1433.5926513671875,
+              1963.8857421875
+            ],
+            [
+              1433.5926513671875,
+              1772.71728515625
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9ec50>"
+        },
+        "page_number": 3,
+        "table_type": "precision_data",
+        "structured_html": "<table><thead><th>项 目</th><th>平均 值 (n=6)</th><th>范围 (n=6)</th></thead><tr><td>信 噪 比</td><td>7.8</td><td>7.1-8.3</td></tr><tr><td>WEE (%)</td><td>2%</td><td>0%-4%</td></tr><tr><td>准确 度 (%)</td><td>95%</td><td>90%-96%</td></tr></table>",
+        "parsed_data": {
+          "headers": [],
+          "rows": []
+        }
+      }
+    ],
+    "img": [
+      {
+        "element_id": "1_0016",
+        "ocr_text": "BTHCP Mit (81%)",
+        "coordinates": {
+          "points": [
+            [
+              349.6194444444444,
+              1761.1222222222223
+            ],
+            [
+              349.6194444444444,
+              2173.9805555555554
+            ],
+            [
+              730.2222222222222,
+              2173.9805555555554
+            ],
+            [
+              730.2222222222222,
+              1761.1222222222223
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9ec10>"
+        },
+        "page_number": 2,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page002_img02_20250807_101528_pos349x1761.jpg",
+        "image_type": "data_visualization",
+        "description": "[图表/示意图]"
+      },
+      {
+        "element_id": "1_0017",
+        "ocr_text": "ERPIRENCP MAGE (63%)",
+        "coordinates": {
+          "points": [
+            [
+              833.4694444444443,
+              1754.1
+            ],
+            [
+              833.4694444444443,
+              2161.2555555555555
+            ],
+            [
+              1261.036111111111,
+              2161.2555555555555
+            ],
+            [
+              1261.036111111111,
+              1754.1
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9f550>"
+        },
+        "page_number": 2,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page002_img03_20250807_101528_pos833x1754.jpg",
+        "image_type": "data_visualization",
+        "description": "[图表/示意图]"
+      },
+      {
+        "element_id": "1_0023",
+        "ocr_text": "Example Standard Curve 1s ‘ 1 i, a Y © os -, a pee od a 一 一 0 和 a 100 Concentration (ng/mL) BPH tite",
+        "coordinates": {
+          "points": [
+            [
+              255.2222222222222,
+              311.43055555555554
+            ],
+            [
+              255.2222222222222,
+              737.0749999999999
+            ],
+            [
+              738.4861111111111,
+              737.0749999999999
+            ],
+            [
+              738.4861111111111,
+              311.43055555555554
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9e0d0>"
+        },
+        "page_number": 3,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page003_img01_20250807_101528_pos255x311.jpg",
+        "image_type": "chart",
+        "description": "[图表/示意图]"
+      },
+      {
+        "element_id": "1_0024",
+        "ocr_text": "Example Standard Curve 4 a rs 7 re ee ee 各 Concentration (ng/mL) ERAREHC? HME",
+        "coordinates": {
+          "points": [
+            [
+              839.4555555555555,
+              311.43055555555554
+            ],
+            [
+              839.4555555555555,
+              737.5944444444444
+            ],
+            [
+              1348.8694444444445,
+              737.5944444444444
+            ],
+            [
+              1348.8694444444445,
+              311.43055555555554
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9fbd0>"
+        },
+        "page_number": 3,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page003_img02_20250807_101528_pos839x311.jpg",
+        "image_type": "chart",
+        "description": "[图表/示意图]"
+      },
+      {
+        "element_id": "1_0025",
+        "ocr_text": "1s ‘ 4 1 i, a Y a © os -, a rs pee od 7 re a 一 一 ee ee 0 各 和 a 100 Concentration (ng/mL) Concentration (ng/mL) BPH tite ERAREHC? HME",
+        "coordinates": {
+          "points": [
+            [
+              273.0262756347656,
+              358.7236328125
+            ],
+            [
+              273.0262756347656,
+              738.1460571289062
+            ],
+            [
+              1336.50244140625,
+              738.1460571289062
+            ],
+            [
+              1336.50244140625,
+              358.7236328125
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9c410>"
+        },
+        "page_number": 3,
+        "image_path": "",
+        "image_type": "general",
+        "description": "[图表/示意图]"
+      }
+    ],
+    "chars": [
+      {
+        "element_id": "1_0015",
+        "description": "· 图中蓝框内是多宁抗体和市面上主流试剂盒中的抗体共同识别的宿主细胞蛋白斑点，而红框则为多宁抗体提供的额外的识别 宿主细胞蛋白斑点。",
+        "page_number": 2,
+        "coordinates": {
+          "points": [
+            [
+              115.87222222222222,
+              1660.0166666666667
+            ],
+            [
+              115.87222222222222,
+              1738.097900390625
+            ],
+            [
+              1538.1607666015625,
+              1738.097900390625
+            ],
+            [
+              1538.1607666015625,
+              1660.0166666666667
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9f610>"
+        }
+      },
+      {
+        "element_id": "1_0022",
+        "description": "对于 CHO-K1 宿主细胞蛋白的测量表明，多宁生物 HCP 检测试剂盒在广泛的范围内（3ng/mL - 100ng/mL）都具有 良好的线性。",
+        "page_number": 3,
+        "coordinates": {
+          "points": [
+            [
+              155.69444444444443,
+              196.56111111111127
+            ],
+            [
+              155.69444444444443,
+              278.2637023925781
+            ],
+            [
+              1431.06591796875,
+              278.2637023925781
+            ],
+            [
+              1431.06591796875,
+              196.56111111111127
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9f450>"
+        }
+      },
+      {
+        "element_id": "1_0029",
+        "description": "在低、中、高三种不同样品浓度考察试剂盒的重复性和精密度，结果表明试剂盒在不同浓度的条件下，重复性和准确性良 好，可以满足检测的质控标准。",
+        "page_number": 3,
+        "coordinates": {
+          "points": [
+            [
+              150.5067901611328,
+              1204.3613611111111
+            ],
+            [
+              150.5067901611328,
+              1286.9595947265625
+            ],
+            [
+              1438.3612060546875,
+              1286.9595947265625
+            ],
+            [
+              1438.3612060546875,
+              1204.3613611111111
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9cb10>"
+        }
+      },
+      {
+        "element_id": "1_0032",
+        "description": "在最低定量限处 (3ng/mL) 对试剂盒的操作指标进行考察，结果表明在最低定量限处试剂盒仍具有良好的信噪比，精 密度和准确性。",
+        "page_number": 3,
+        "coordinates": {
+          "points": [
+            [
+              155.71944444444443,
+              1672.150390625
+            ],
+            [
+              155.71944444444443,
+              1756.837646484375
+            ],
+            [
+              1433.550048828125,
+              1756.837646484375
+            ],
+            [
+              1433.550048828125,
+              1672.150390625
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9c390>"
+        }
+      }
+    ]
+  },
+  {
+    "content": "标题: 订货信息\n表格数据: 030101 030102 030103 细胞宿主蛋白检测试剂盒 需包被 细胞宿主蛋白检测试剂盒 预包被 细胞宿主蛋白检测试剂盒 即用型 CHO DNRG CHO DNRG CHO",
+    "content_type": "title_with_content",
+    "title": "订货信息",
+    "page_number": 3,
+    "element_id": "1_0034",
+    "element_ids": [
+      "1_0034",
+      "1_0035"
+    ],
+    "hierarchy_info": {
+      "title_level": 1,
+      "hierarchy_depth": 1
+    },
+    "coordinates": {
+      "points": [
+        [
+          111.60833333333333,
+          1988.6739501953125
+        ],
+        [
+          111.60833333333333,
+          2027.61376953125
+        ],
+        [
+          222.71944444444443,
+          2027.61376953125
+        ],
+        [
+          222.71944444444443,
+          1988.6739501953125
+        ]
+      ],
+      "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15ba9c090>"
+    },
+    "table": [
+      {
+        "element_id": "1_0035",
+        "raw_text": "产 品 名 称 货 号 CHO细胞宿主蛋白检测试剂盒（需包被） DNRG030101 CHO细胞宿主蛋白检测试剂盒（预包被） DNRG030102 CHO细胞宿主蛋白检测试剂盒（即用型） DNRG030103",
+        "coordinates": {
+          "points": [
+            [
+              167.09393310546875,
+              2040.335205078125
+            ],
+            [
+              167.09393310546875,
+              2192.93212890625
+            ],
+            [
+              1426.3232421875,
+              2192.93212890625
+            ],
+            [
+              1426.3232421875,
+              2040.335205078125
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15bb28250>"
+        },
+        "page_number": 3,
+        "table_type": "general",
+        "structured_html": "<table><thead><th>CHO 细 胞 宿主 蛋白 检测 试剂 盒 〈 需 包 被 )</th><th>DNRG030101</th></thead><tr><td>CHO 细 胞 宿主 蛋白 检测 试剂 盒 〈 预 包 被 )</td><td>DNRG030102</td></tr><tr><td>CHO 细 胞 宿主 蛋白 检测 试剂 盒 〈 即 用 型</td><td>DNRG030103</td></tr></table>",
+        "parsed_data": {
+          "headers": [],
+          "rows": []
+        }
+      }
+    ],
+    "img": [],
+    "chars": []
+  },
+  {
+    "content": "标题: ?Ne\n02\n图片内容: 2024 Ver 01\n图片内容: BIOTECHNOLOGY LTD 扫描\n图片: [二维码图片]\n图片: [二维码图片]\n图片: [二维码图片]\n图片: [二维码图片]\n图片内容: 扫描 综合\n2024 Ver.01",
+    "content_type": "title_with_content",
+    "title": "?Ne",
+    "page_number": 3,
+    "element_id": "1_0036",
+    "element_ids": [
+      "1_0036",
+      "1_0037",
+      "1_0039",
+      "1_0040",
+      "1_0041",
+      "1_0042",
+      "1_0043",
+      "1_0044",
+      "1_0045",
+      "1_0046"
+    ],
+    "hierarchy_info": {
+      "title_level": 1,
+      "hierarchy_depth": 1
+    },
+    "coordinates": {
+      "points": [
+        [
+          1427.0,
+          2237.0
+        ],
+        [
+          1427.0,
+          2267.0
+        ],
+        [
+          1509.0,
+          2267.0
+        ],
+        [
+          1509.0,
+          2237.0
+        ]
+      ],
+      "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15bb28390>"
+    },
+    "table": [],
+    "img": [
+      {
+        "element_id": "1_0039",
+        "ocr_text": "2024  Ver.01",
+        "coordinates": {
+          "points": [
+            [
+              7.696416666666666,
+              4.792055555555584
+            ],
+            [
+              7.696416666666666,
+              2341.9865
+            ],
+            [
+              1660.3353055555556,
+              2341.9865
+            ],
+            [
+              1660.3353055555556,
+              4.792055555555584
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15bb29550>"
+        },
+        "page_number": 4,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page004_img01_20250807_101528_pos7x4.jpg",
+        "image_type": "general",
+        "description": "[图表/示意图]"
+      },
+      {
+        "element_id": "1_0040",
+        "ocr_text": "物 科 技 股 份 有 限 公 司 BIOTECHNOLOGY CO.,LTD. 办 公 地 幢 扫描 二 维 码",
+        "coordinates": {
+          "points": [
+            [
+              365.69722222222225,
+              1754.7916666666663
+            ],
+            [
+              365.69722222222225,
+              2151.458333333333
+            ],
+            [
+              1260.697222222222,
+              2151.458333333333
+            ],
+            [
+              1260.697222222222,
+              1754.7916666666663
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15bb28bd0>"
+        },
+        "page_number": 4,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page004_img02_20250807_101528_pos365x1754.jpg",
+        "image_type": "general",
+        "description": "[图表/示意图]"
+      },
+      {
+        "element_id": "1_0041",
+        "ocr_text": "",
+        "coordinates": {
+          "points": [
+            [
+              967.7222222222222,
+              1821.338888888889
+            ],
+            [
+              967.7222222222222,
+              2086.375
+            ],
+            [
+              1232.7583333333332,
+              2086.375
+            ],
+            [
+              1232.7583333333332,
+              1821.338888888889
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15bb2a910>"
+        },
+        "page_number": 4,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page004_img03_20250807_101528_pos967x1821.jpg",
+        "image_type": "qr_code",
+        "description": "[二维码图片]"
+      },
+      {
+        "element_id": "1_0042",
+        "ocr_text": "",
+        "coordinates": {
+          "points": [
+            [
+              967.7222222222222,
+              1821.338888888889
+            ],
+            [
+              967.7222222222222,
+              2086.375
+            ],
+            [
+              1232.7583333333332,
+              2086.375
+            ],
+            [
+              1232.7583333333332,
+              1821.338888888889
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15bb2ad10>"
+        },
+        "page_number": 4,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page004_img04_20250807_101528_pos967x1821.jpg",
+        "image_type": "qr_code",
+        "description": "[二维码图片]"
+      },
+      {
+        "element_id": "1_0043",
+        "ocr_text": "",
+        "coordinates": {
+          "points": [
+            [
+              1267.9722222222222,
+              1825.936111111111
+            ],
+            [
+              1267.9722222222222,
+              2081.7749999999996
+            ],
+            [
+              1523.8111111111111,
+              2081.7749999999996
+            ],
+            [
+              1523.8111111111111,
+              1825.936111111111
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15bb2a390>"
+        },
+        "page_number": 4,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page004_img05_20250807_101528_pos1267x1825.jpg",
+        "image_type": "qr_code",
+        "description": "[二维码图片]"
+      },
+      {
+        "element_id": "1_0044",
+        "ocr_text": "",
+        "coordinates": {
+          "points": [
+            [
+              1282.411111111111,
+              1829.3777777777777
+            ],
+            [
+              1282.411111111111,
+              2080.4166666666665
+            ],
+            [
+              1536.361111111111,
+              2080.4166666666665
+            ],
+            [
+              1536.361111111111,
+              1829.3777777777777
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15bb29890>"
+        },
+        "page_number": 4,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page004_img06_20250807_101528_pos1282x1829.jpg",
+        "image_type": "qr_code",
+        "description": "[二维码图片]"
+      },
+      {
+        "element_id": "1_0045",
+        "ocr_text": "扫描 下 载 综合",
+        "coordinates": {
+          "points": [
+            [
+              1181.3638888888888,
+              1874.9527777777776
+            ],
+            [
+              1181.3638888888888,
+              2139.5333333333333
+            ],
+            [
+              1445.9305555555554,
+              2139.5333333333333
+            ],
+            [
+              1445.9305555555554,
+              1874.9527777777776
+            ]
+          ],
+          "system": "<unstructured.documents.coordinates.PixelSpace object at 0x15bb29110>"
+        },
+        "page_number": 4,
+        "image_path": "/Users/craig-mac/Documents/dntu_workspace/py_workspace/GraphRAG/figures/20240906-CHO试剂盒单页_page004_img07_20250807_101528_pos1181x1874.jpg",
+        "image_type": "general",
+        "description": "[图表/示意图]"
+      }
+    ],
+    "chars": []
+  }
+]

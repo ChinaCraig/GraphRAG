@@ -1,6 +1,15 @@
--- GraphRAG数据库初始化脚本
+-- GraphRAG数据库初始化脚本 v2.0
 -- 创建GraphRAG系统所需的所有数据库表
 -- 数据库连接信息：192.168.16.26:3306, root, !200808Xx
+--
+-- 更新日志：
+-- v2.0: 完整支持"一家子"概念的GraphRAG系统
+--   - document_chunks表支持element_id字段，实现内容关联
+--   - content字段改为JSON类型，存储完整的content_units数据
+--   - 支持table、img、chars结构化数据存储
+--   - 添加content_hash字段用于内容去重和校验
+--   - 优化索引结构，提升查询性能
+--   - 增加GraphRAG专用配置项
 
 -- 创建数据库
 CREATE DATABASE IF NOT EXISTS `graph_rag` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -38,23 +47,27 @@ CREATE TABLE `documents` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文档表';
 
 -- 文档分块表
+-- 更新：支持"一家子"概念的完整结构，element_id用于关联同一标题下的所有内容
+-- content字段存储完整的content_units JSON数据，包含table、img、chars结构化信息
 DROP TABLE IF EXISTS `document_chunks`;
 CREATE TABLE `document_chunks` (
   `id` int(11) NOT NULL AUTO_INCREMENT COMMENT '分块ID',
   `document_id` int(11) NOT NULL COMMENT '文档ID',
+  `element_id` varchar(50) NOT NULL COMMENT '一家子的唯一标识符（标题ID），用于关联同一标题下的所有内容',
   `chunk_index` int(11) NOT NULL COMMENT '分块索引',
-  `content` text NOT NULL COMMENT '分块内容',
-  `content_hash` varchar(64) DEFAULT NULL COMMENT '内容哈希',
-  `vector_id` varchar(100) DEFAULT NULL COMMENT '向量ID',
+  `content` json NOT NULL COMMENT 'content_units的完整JSON数据，包含向量化内容和结构化数据(table/img/chars)',
+  `content_hash` varchar(64) DEFAULT NULL COMMENT '内容哈希值（SHA256），用于去重和校验',
+  `vector_id` varchar(100) DEFAULT NULL COMMENT '对应Milvus中的向量ID',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `idx_doc_chunk` (`document_id`, `chunk_index`),
-  KEY `idx_document_id` (`document_id`),
-  KEY `idx_vector_id` (`vector_id`),
-  KEY `idx_content_hash` (`content_hash`),
+  UNIQUE KEY `idx_doc_chunk` (`document_id`, `chunk_index`) COMMENT '文档和分块索引的唯一约束',
+  KEY `idx_document_id` (`document_id`) COMMENT '文档ID索引',
+  KEY `idx_element_id` (`element_id`) COMMENT '一家子ID索引，用于快速检索相关内容',
+  KEY `idx_vector_id` (`vector_id`) COMMENT '向量ID索引，用于关联Milvus数据',
+  KEY `idx_create_time` (`create_time`) COMMENT '创建时间索引，用于时间范围查询',
   CONSTRAINT `fk_chunks_document` FOREIGN KEY (`document_id`) REFERENCES `documents` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文档分块表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文档分块表 - 存储向量化后的内容单元和完整结构化数据';
 
 -- ===========================
 -- 知识图谱相关表
@@ -185,17 +198,20 @@ CREATE TABLE `operation_logs` (
 -- 插入初始数据
 -- ===========================
 
--- 插入系统配置
+-- 插入系统配置（包含GraphRAG优化后的配置）
 INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`) VALUES
 ('system_version', '1.0.0', 'string', '系统版本'),
 ('max_file_size', '104857600', 'integer', '最大文件大小(字节)'),
-('default_chunk_size', '1000', 'integer', '默认文本分块大小'),
+('default_chunk_size', '2000', 'integer', '默认文本分块大小（优化后避免过度分割）'),
 ('default_chunk_overlap', '200', 'integer', '默认文本分块重叠'),
-('vector_dimension', '768', 'integer', '向量维度'),
+('vector_dimension', '768', 'integer', '向量维度（sentence-transformers模型）'),
 ('search_top_k', '10', 'integer', '默认搜索返回数量'),
 ('enable_ocr', '1', 'boolean', '是否启用OCR'),
 ('ocr_language', 'chi_sim+eng', 'string', 'OCR识别语言'),
-('log_retention_days', '30', 'integer', '日志保留天数');
+('log_retention_days', '30', 'integer', '日志保留天数'),
+('graphrag_version', '2.0.0', 'string', 'GraphRAG系统版本'),
+('enable_element_id', '1', 'boolean', '是否启用一家子element_id功能'),
+('enable_structured_data', '1', 'boolean', '是否启用table/img/chars结构化数据存储');
 
 -- ===========================
 -- 创建索引（优化查询性能）
@@ -203,7 +219,14 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 
 -- 复合索引
 CREATE INDEX `idx_doc_status_type` ON `documents` (`process_status`, `file_type`);
+
+-- document_chunks表的复合索引（优化GraphRAG查询）
 CREATE INDEX `idx_chunk_doc_vector` ON `document_chunks` (`document_id`, `vector_id`);
+CREATE INDEX `idx_chunk_element_doc` ON `document_chunks` (`element_id`, `document_id`) COMMENT '按一家子ID和文档ID查询优化';
+CREATE INDEX `idx_chunk_doc_element_index` ON `document_chunks` (`document_id`, `element_id`, `chunk_index`) COMMENT '完整内容检索优化';
+CREATE INDEX `idx_chunk_hash_doc` ON `document_chunks` (`content_hash`, `document_id`) COMMENT '内容去重查询优化';
+
+-- 其他表的复合索引
 CREATE INDEX `idx_entity_name_type` ON `entities` (`name`, `entity_type`);
 CREATE INDEX `idx_relation_head_tail` ON `relations` (`head_entity_id`, `tail_entity_id`);
 CREATE INDEX `idx_search_type_time` ON `search_history` (`search_type`, `search_time`);
@@ -364,4 +387,14 @@ FROM information_schema.tables
 WHERE table_schema = 'graph_rag';
 
 -- 输出初始化完成信息
-SELECT 'GraphRAG数据库初始化完成！' AS status;
+SELECT 'GraphRAG数据库v2.0初始化完成！' AS status;
+
+-- 显示document_chunks表的详细结构（验证更新）
+SELECT 'document_chunks表结构验证:' AS info;
+DESCRIBE document_chunks;
+
+-- 显示系统配置（验证GraphRAG配置）
+SELECT 'GraphRAG系统配置:' AS info;
+SELECT config_key, config_value, description 
+FROM system_config 
+WHERE config_key IN ('graphrag_version', 'enable_element_id', 'enable_structured_data', 'default_chunk_size', 'vector_dimension');

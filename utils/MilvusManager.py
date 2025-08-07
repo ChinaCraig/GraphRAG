@@ -9,7 +9,7 @@ import numpy as np
 from typing import Optional, Dict, Any, List, Union
 from pymilvus import (
     connections, Collection, DataType, FieldSchema, CollectionSchema,
-    utility, Index
+    utility, Index, db
 )
 from pymilvus.exceptions import MilvusException
 import json
@@ -51,7 +51,7 @@ class MilvusManager:
     def _init_connection(self) -> None:
         """初始化Milvus连接"""
         try:
-            # 连接到Milvus服务器
+            # 连接到Milvus服务器（不指定数据库，先连接后检查数据库）
             connections.connect(
                 alias="default",
                 host=self.milvus_config['host'],
@@ -61,8 +61,44 @@ class MilvusManager:
             
             self.logger.info(f"Milvus连接成功: {self.milvus_config['host']}:{self.milvus_config['port']}")
             
+            # 检查并创建数据库
+            self._check_and_create_database()
+            
         except MilvusException as e:
             self.logger.error(f"Milvus连接失败: {str(e)}")
+            raise
+    
+    def _check_and_create_database(self) -> None:
+        """检查并创建数据库"""
+        try:
+            database_name = self.milvus_config.get('database', 'default')
+            
+            # 获取所有数据库列表
+            databases = db.list_database()
+            self.logger.info(f"现有数据库列表: {databases}")
+            
+            # 检查目标数据库是否存在
+            if database_name not in databases:
+                self.logger.info(f"数据库 '{database_name}' 不存在，正在创建...")
+                db.create_database(database_name)
+                self.logger.info(f"数据库 '{database_name}' 创建成功")
+            else:
+                self.logger.info(f"数据库 '{database_name}' 已存在")
+            
+            # 重新连接到指定数据库
+            connections.disconnect(alias="default")
+            connections.connect(
+                alias="default",
+                host=self.milvus_config['host'],
+                port=str(self.milvus_config['port']),
+                db_name=database_name,
+                timeout=self.milvus_config.get('timeout', 30)
+            )
+            
+            self.logger.info(f"已连接到数据库: {database_name}")
+            
+        except MilvusException as e:
+            self.logger.error(f"数据库检查和创建失败: {str(e)}")
             raise
     
     def _init_collection(self) -> None:
@@ -73,8 +109,20 @@ class MilvusManager:
             # 检查集合是否存在
             if utility.has_collection(collection_name):
                 self.collection = Collection(collection_name)
-                self.logger.info(f"使用已存在的集合: {collection_name}")
+                self.logger.info(f"找到已存在的集合: {collection_name}")
+                
+                # 检查集合schema是否匹配当前要求
+                if self._check_collection_schema():
+                    self.logger.info("集合schema匹配，直接使用")
+                    # 加载集合到内存
+                    self.collection.load()
+                    self.logger.info("集合已加载到内存")
+                else:
+                    self.logger.warning("集合schema不匹配，需要重新创建集合")
+                    # 删除旧集合并创建新集合
+                    self._recreate_collection()
             else:
+                self.logger.info(f"集合 '{collection_name}' 不存在，正在创建...")
                 # 创建集合
                 self._create_collection()
                 
@@ -107,6 +155,12 @@ class MilvusManager:
                     name="document_id",
                     dtype=DataType.INT64,
                     description="文档ID"
+                ),
+                FieldSchema(
+                    name="element_id",
+                    dtype=DataType.VARCHAR,
+                    max_length=50,
+                    description="一家子的唯一标识符（标题ID）"
                 ),
                 FieldSchema(
                     name="chunk_index",
@@ -142,7 +196,10 @@ class MilvusManager:
             # 创建索引
             self._create_index()
             
-            self.logger.info(f"集合创建成功: {collection_name}")
+            # 加载集合到内存
+            self.collection.load()
+            
+            self.logger.info(f"集合创建并加载成功: {collection_name}")
             
         except MilvusException as e:
             self.logger.error(f"创建集合失败: {str(e)}")
@@ -170,12 +227,80 @@ class MilvusManager:
             self.logger.error(f"创建向量索引失败: {str(e)}")
             raise
     
+    def _check_collection_schema(self) -> bool:
+        """
+        检查集合schema是否匹配当前要求
+        主要检查字段是否完整，特别是新添加的element_id字段
+        
+        Returns:
+            bool: True表示schema匹配，False表示不匹配
+        """
+        try:
+            if not self.collection:
+                return False
+            
+            # 获取当前集合的schema
+            current_schema = self.collection.schema
+            current_fields = {field.name: field for field in current_schema.fields}
+            
+            # 定义期望的字段列表
+            expected_fields = [
+                "id", "vector", "document_id", "element_id", 
+                "chunk_index", "content", "metadata"
+            ]
+            
+            # 检查是否包含所有期望的字段
+            missing_fields = []
+            for field_name in expected_fields:
+                if field_name not in current_fields:
+                    missing_fields.append(field_name)
+            
+            if missing_fields:
+                self.logger.warning(f"集合缺少字段: {missing_fields}")
+                return False
+            
+            # 特别检查element_id字段（新添加的字段）
+            if "element_id" in current_fields:
+                element_id_field = current_fields["element_id"]
+                if (element_id_field.dtype != DataType.VARCHAR or 
+                    element_id_field.params.get("max_length", 0) != 50):
+                    self.logger.warning("element_id字段类型或长度不匹配")
+                    return False
+            
+            self.logger.info("集合schema检查通过")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"检查集合schema失败: {str(e)}")
+            return False
+    
+    def _recreate_collection(self) -> None:
+        """重新创建集合（删除旧集合后创建新集合）"""
+        try:
+            collection_name = self.milvus_config['collection']
+            
+            self.logger.info(f"开始重新创建集合: {collection_name}")
+            
+            # 释放并删除旧集合
+            if self.collection:
+                self.collection.release()
+                utility.drop_collection(collection_name)
+                self.logger.info("旧集合已删除")
+            
+            # 创建新集合
+            self._create_collection()
+            self.logger.info("集合重新创建完成")
+            
+        except MilvusException as e:
+            self.logger.error(f"重新创建集合失败: {str(e)}")
+            raise
+    
     def insert_vectors(self, data: List[Dict[str, Any]]) -> bool:
         """
         插入向量数据
         
         Args:
-            data: 向量数据列表，每个元素包含id, vector, document_id, chunk_index, content, metadata
+            data: 向量数据列表，每个元素包含id, vector, document_id, element_id, chunk_index, content, metadata
             
         Returns:
             bool: 插入成功返回True
@@ -189,6 +314,7 @@ class MilvusManager:
             ids = []
             vectors = []
             document_ids = []
+            element_ids = []
             chunk_indices = []
             contents = []
             metadatas = []
@@ -203,6 +329,7 @@ class MilvusManager:
                 ids.append(item_id)
                 vectors.append(item["vector"])
                 document_ids.append(item["document_id"])
+                element_ids.append(item["element_id"])
                 chunk_indices.append(item["chunk_index"])
                 contents.append(item["content"])
                 metadatas.append(json.dumps(item.get("metadata", {}), ensure_ascii=False))
@@ -212,6 +339,7 @@ class MilvusManager:
                 ids,           # id字段
                 vectors,       # vector字段
                 document_ids,  # document_id字段
+                element_ids,   # element_id字段
                 chunk_indices, # chunk_index字段
                 contents,      # content字段
                 metadatas      # metadata字段
@@ -268,7 +396,7 @@ class MilvusManager:
                 param=search_params,
                 limit=top_k,
                 expr=expr,
-                output_fields=["id", "document_id", "chunk_index", "content", "metadata"]
+                output_fields=["id", "document_id", "element_id", "chunk_index", "content", "metadata"]
             )
             
             # 处理搜索结果
@@ -279,6 +407,7 @@ class MilvusManager:
                         "id": hit.entity.get("id"),
                         "score": hit.score,
                         "document_id": hit.entity.get("document_id"),
+                        "element_id": hit.entity.get("element_id"),
                         "chunk_index": hit.entity.get("chunk_index"),
                         "content": hit.entity.get("content"),
                         "metadata": json.loads(hit.entity.get("metadata", "{}"))
@@ -371,7 +500,7 @@ class MilvusManager:
             expr = f"id in {ids}"
             results = self.collection.query(
                 expr=expr,
-                output_fields=["id", "document_id", "chunk_index", "content", "metadata"]
+                output_fields=["id", "document_id", "element_id", "chunk_index", "content", "metadata"]
             )
             
             query_results = []
@@ -379,6 +508,7 @@ class MilvusManager:
                 query_result = {
                     "id": result.get("id"),
                     "document_id": result.get("document_id"),
+                    "element_id": result.get("element_id"),
                     "chunk_index": result.get("chunk_index"),
                     "content": result.get("content"),
                     "metadata": json.loads(result.get("metadata", "{}"))
