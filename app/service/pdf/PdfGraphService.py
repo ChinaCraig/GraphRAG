@@ -1601,29 +1601,29 @@ class PdfGraphService:
             if 'content_element_nodes' in graph_structure:
                 for element_node in graph_structure['content_element_nodes']:
                     success = self.neo4j_manager.create_node(element_node['type'], element_node['properties'])
-                if success:
-                    nodes_created += 1
+                    if success:
+                        nodes_created += 1
             
             # 创建标题节点
             if 'title_nodes' in graph_structure:
-            for title_node in graph_structure['title_nodes']:
-                success = self.neo4j_manager.create_node(title_node['type'], title_node['properties'])
-                if success:
-                    nodes_created += 1
+                for title_node in graph_structure['title_nodes']:
+                    success = self.neo4j_manager.create_node(title_node['type'], title_node['properties'])
+                    if success:
+                        nodes_created += 1
             
             # 创建内容节点（兼容原有格式）
             if 'content_nodes' in graph_structure:
-            for content_node in graph_structure['content_nodes']:
-                success = self.neo4j_manager.create_node(content_node['type'], content_node['properties'])
-                if success:
-                    nodes_created += 1
+                for content_node in graph_structure['content_nodes']:
+                    success = self.neo4j_manager.create_node(content_node['type'], content_node['properties'])
+                    if success:
+                        nodes_created += 1
             
             # 创建语义实体节点
             if 'semantic_entities' in graph_structure:
-            for entity in graph_structure['semantic_entities']:
-                success = self.neo4j_manager.create_node(entity['type'], entity['properties'])
-                if success:
-                    nodes_created += 1
+                for entity in graph_structure['semantic_entities']:
+                    success = self.neo4j_manager.create_node(entity['type'], entity['properties'])
+                    if success:
+                        nodes_created += 1
             
             return nodes_created
             
@@ -1724,39 +1724,39 @@ class PdfGraphService:
             
             # 创建标题-内容关系（兼容原有格式）
             if 'title_content_relationships' in graph_structure:
-            for rel in graph_structure['title_content_relationships']:
-                success = self._create_relationship_by_property(
-                    rel['title_id'], 
-                    rel['content_id'], 
-                    rel['relationship_type'], 
-                    rel['properties']
-                )
-                if success:
-                    relationships_created += 1
+                for rel in graph_structure['title_content_relationships']:
+                    success = self._create_relationship_by_property(
+                        rel['title_id'], 
+                        rel['content_id'], 
+                        rel['relationship_type'], 
+                        rel['properties']
+                    )
+                    if success:
+                        relationships_created += 1
             
             # 创建内容层级关系（兼容原有格式）
             if 'content_hierarchy_relationships' in graph_structure:
-            for rel in graph_structure['content_hierarchy_relationships']:
-                success = self._create_relationship_by_property(
-                    rel['parent_id'], 
-                    rel['child_id'], 
-                    rel['relationship_type'], 
-                    rel['properties']
-                )
-                if success:
-                    relationships_created += 1
+                for rel in graph_structure['content_hierarchy_relationships']:
+                    success = self._create_relationship_by_property(
+                        rel['parent_id'], 
+                        rel['child_id'], 
+                        rel['relationship_type'], 
+                        rel['properties']
+                    )
+                    if success:
+                        relationships_created += 1
             
             # 创建实体关系
             if 'entity_relationships' in graph_structure:
-            for rel in graph_structure['entity_relationships']:
-                success = self._create_relationship_by_property(
-                    rel['source_id'], 
-                    rel['target_id'], 
-                    rel['relationship_type'], 
-                    rel['properties']
-                )
-                if success:
-                    relationships_created += 1
+                for rel in graph_structure['entity_relationships']:
+                    success = self._create_relationship_by_property(
+                        rel['source_id'], 
+                        rel['target_id'], 
+                        rel['relationship_type'], 
+                        rel['properties']
+                    )
+                    if success:
+                        relationships_created += 1
             
             return relationships_created
             

@@ -95,61 +95,14 @@ class PdfGraphTest:
             }
 
 
-def find_json_files():
-    """查找可用的JSON文件"""
-    possible_paths = [
-        "upload/json/20240906-CHO试剂盒单页_content_units.json",
-        "upload/json/20240906-CHO试剂盒单页_doc_1.json", 
-        "/upload/json/20240906-CHO试剂盒单页_content_units.json",
-        "/upload/json/20240906-CHO试剂盒单页_doc_1.json",
-        os.path.join(os.getcwd(), "upload/json/20240906-CHO试剂盒单页_content_units.json"),
-        os.path.join(os.getcwd(), "upload/json/20240906-CHO试剂盒单页_doc_1.json")
-    ]
-    
-    print("🔍 正在搜索JSON文件...")
-    found_files = []
-    
-    for path in possible_paths:
-        if os.path.exists(path):
-            file_size = os.path.getsize(path) / 1024  # KB
-            found_files.append((path, file_size))
-            print(f"✅ 找到文件: {path} ({file_size:.1f} KB)")
-    
-    if not found_files:
-        print("❌ 未找到任何JSON文件")
-        print("📁 当前工作目录:", os.getcwd())
-        print("🔍 请检查以下可能的路径:")
-        for path in possible_paths[:4]:
-            print(f"   - {path}")
-    
-    return found_files
-
 
 def main():
     """主函数"""
     # ==================== 测试参数配置 ====================
     # 📝 手动调整这些变量进行测试
-    
-    # 首先查找可用的JSON文件
-    found_files = find_json_files()
-    
-    if found_files:
-        # 优先使用content_units.json文件
-        content_units_files = [f for f in found_files if 'content_units' in f[0]]
-        if content_units_files:
-            json_file_path = content_units_files[0][0]
-            print(f"🎯 自动选择推荐文件: {json_file_path}")
-        else:
-            json_file_path = found_files[0][0]
-            print(f"🎯 自动选择第一个文件: {json_file_path}")
-    else:
-        # 如果找不到文件，使用默认路径
-        json_file_path = "upload/json/20240906-CHO试剂盒单页_content_units.json"
-        print(f"⚠️  使用默认路径: {json_file_path}")
-    
     # 文档ID - 根据需要修改
     document_id = 1
-    
+    json_file_path = "upload/json/20240906-CHO试剂盒单页_content_units.json"
     # ==================== 执行测试 ====================
     try:
         print("🚀 开始PDF知识图谱构建测试")

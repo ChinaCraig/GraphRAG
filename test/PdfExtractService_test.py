@@ -21,7 +21,7 @@ def test_partition_pdf():
     print("=" * 60)
     
     # 请替换为实际的PDF文件路径
-    pdf_file_path = "/Users/craig-mac/Downloads/多宁产品手册/20240906-CHO试剂盒单页.pdf"  # 在这里输入你的PDF文件路径
+    pdf_file_path = "/Users/craig-macmini/Downloads/多宁产品手册/20240906-CHO试剂盒单页.pdf"  # 在这里输入你的PDF文件路径
     
     try:
         # 初始化服务
