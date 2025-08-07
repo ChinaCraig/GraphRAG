@@ -12,8 +12,8 @@ app:
   
 # 文件配置
 file:
-  upload_folder: "./uploads"         # 文件上传目录
-  processed_folder: "./processed"    # 文件处理后存储目录
+  upload_folder: "./upload"         # 文件上传目录
+#  processed_folder: "./processed"    # 文件处理后存储目录
   temp_folder: "./temp"             # 临时文件目录
   max_file_size: 104857600          # 最大文件大小(100MB)
   allowed_extensions:               # 允许的文件扩展名

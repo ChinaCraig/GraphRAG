@@ -3,10 +3,11 @@ Routes包初始化文件
 包含所有路由模块
 """
 
-from .FileRoutes import file_bp
-from .SearchRoutes import search_bp
+# 注意：不要在这里直接导入所有模块，会导致依赖问题
+# 改为按需导入，避免在导入前端路由时触发后端依赖
 
 __all__ = [
     'file_bp',
-    'search_bp'
+    'search_bp',
+    'frontend_bp'
 ]

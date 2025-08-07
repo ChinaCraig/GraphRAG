@@ -12,6 +12,7 @@ from datetime import datetime
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 import json
+import threading
 
 from utils.MySQLManager import MySQLManager
 
@@ -53,9 +54,14 @@ class FileService:
         """创建必要的目录"""
         directories = [
             self.file_config['upload_folder'],
-            self.file_config['processed_folder'],
             self.file_config['temp_folder']
         ]
+        
+        # 添加文件类型子目录
+        upload_folder = self.file_config['upload_folder']
+        file_type_dirs = ['pdf', 'doc', 'docx', 'xlsx', 'xls', 'pptx', 'ppt', 'txt', 'md', 'images']
+        for file_type in file_type_dirs:
+            directories.append(os.path.join(upload_folder, file_type))
         
         for directory in directories:
             if not os.path.exists(directory):
@@ -146,8 +152,15 @@ class FileService:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             unique_filename = f"{timestamp}_{filename}"
             
-            # 保存文件
-            file_path = os.path.join(self.file_config['upload_folder'], unique_filename)
+            # 根据文件类型选择子目录
+            if file_ext in ['jpg', 'jpeg', 'png', 'gif', 'bmp']:
+                sub_dir = 'images'
+            else:
+                sub_dir = file_ext
+            
+            # 保存文件到相应的子目录
+            file_dir = os.path.join(self.file_config['upload_folder'], sub_dir)
+            file_path = os.path.join(file_dir, unique_filename)
             file.save(file_path)
             
             # 计算文件哈希
@@ -185,6 +198,11 @@ class FileService:
                 file_id = file_info['id'] if file_info else None
                 
                 self.logger.info(f"文件上传成功: {filename}, ID: {file_id}")
+                
+                # 异步启动处理流程
+                if file_ext == 'pdf':  # 只对PDF文件进行后续处理
+                    threading.Thread(target=self._async_process_file, args=(file_id, file_path)).start()
+                
                 return {
                     'success': True,
                     'message': '文件上传成功',
@@ -482,3 +500,107 @@ class FileService:
         except Exception as e:
             self.logger.error(f"清理临时文件失败: {str(e)}")
             return 0
+    
+    def _async_process_file(self, file_id: int, file_path: str) -> None:
+        """
+        异步处理文件（提取内容、向量化、知识图谱）
+        
+        Args:
+            file_id: 文件ID
+            file_path: 文件路径
+        """
+        try:
+            # 导入处理服务
+            from app.service.pdf.PdfExtractService import PdfExtractService
+            from app.service.pdf.PdfVectorService import PdfVectorService
+            from app.service.pdf.PdfGraphService import PdfGraphService
+            
+            pdf_extract_service = PdfExtractService()
+            pdf_vector_service = PdfVectorService()
+            pdf_graph_service = PdfGraphService()
+            
+            self.logger.info(f"开始异步处理文件，ID: {file_id}")
+            
+            # 步骤1：内容提取 (10% -> 40%)
+            self.update_file_status(file_id, 'extracting')
+            extract_result = pdf_extract_service.extract_pdf_content(file_path, file_id)
+            
+            if not extract_result['success']:
+                self.update_file_status(file_id, 'extract_failed')
+                self.logger.error(f"文件内容提取失败，ID: {file_id}, 错误: {extract_result['message']}")
+                return
+            
+            # 获取生成的JSON文件路径
+            json_file_path = self._get_json_file_path(file_path, file_id)
+            if not json_file_path or not os.path.exists(json_file_path):
+                self.update_file_status(file_id, 'extract_failed')
+                self.logger.error(f"未找到提取的JSON文件，ID: {file_id}")
+                return
+                
+            self.update_file_status(file_id, 'extracted')
+            self.logger.info(f"文件内容提取完成，ID: {file_id}")
+            
+            # 步骤2：向量化 (40% -> 70%)
+            self.update_file_status(file_id, 'vectorizing')
+            vector_result = pdf_vector_service.process_pdf_json_to_vectors(json_file_path, file_id)
+            
+            if not vector_result['success']:
+                self.update_file_status(file_id, 'vectorize_failed')
+                self.logger.error(f"文件向量化失败，ID: {file_id}, 错误: {vector_result['message']}")
+                return
+                
+            self.update_file_status(file_id, 'vectorized')
+            self.logger.info(f"文件向量化完成，ID: {file_id}")
+            
+            # 步骤3：知识图谱构建 (70% -> 100%)
+            self.update_file_status(file_id, 'graph_processing')
+            graph_result = pdf_graph_service.process_pdf_json_to_graph(json_file_path, file_id)
+            
+            if not graph_result['success']:
+                self.update_file_status(file_id, 'graph_failed')
+                self.logger.error(f"知识图谱构建失败，ID: {file_id}, 错误: {graph_result['message']}")
+                return
+                
+            # 所有步骤完成
+            self.update_file_status(file_id, 'completed')
+            self.logger.info(f"文件处理全部完成，ID: {file_id}")
+            
+        except Exception as e:
+            self.logger.error(f"异步文件处理失败，ID: {file_id}, 错误: {str(e)}")
+            self.update_file_status(file_id, 'process_failed')
+    
+    def _get_json_file_path(self, pdf_file_path: str, file_id: int) -> Optional[str]:
+        """
+        获取提取后的JSON文件路径
+        
+        Args:
+            pdf_file_path: PDF文件路径
+            file_id: 文件ID
+            
+        Returns:
+            Optional[str]: JSON文件路径
+        """
+        try:
+            # 根据PDF文件路径推测JSON文件路径
+            # 通常保存在upload/json目录下
+            filename = os.path.basename(pdf_file_path)
+            name_without_ext = os.path.splitext(filename)[0]
+            
+            # 尝试多种可能的JSON文件名
+            possible_names = [
+                f"{name_without_ext}_doc_1.json",
+                f"{name_without_ext}_content_units.json"
+            ]
+            
+            json_dir = os.path.join(self.file_config['upload_folder'], 'json')
+            
+            for json_name in possible_names:
+                json_path = os.path.join(json_dir, json_name)
+                if os.path.exists(json_path):
+                    return json_path
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"获取JSON文件路径失败: {str(e)}")
+            return None

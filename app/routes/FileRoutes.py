@@ -8,6 +8,7 @@ from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 import json
 from datetime import datetime
+from typing import Dict, Any
 
 from app.service.FileService import FileService
 from app.service.pdf.PdfExtractService import PdfExtractService
@@ -566,6 +567,80 @@ def too_large(e):
         'message': '文件过大',
         'code': 413
     }), 413
+
+
+@file_bp.route('/<int:file_id>/progress', methods=['GET'])
+def get_file_progress(file_id):
+    """
+    获取文件处理进度接口
+    
+    Args:
+        file_id: 文件ID
+        
+    Returns:
+        JSON响应，包含处理进度信息
+    """
+    try:
+        # 获取文件信息
+        file_info = file_service.get_file_info(file_id)
+        if not file_info:
+            return jsonify({
+                'success': False,
+                'message': '文件不存在',
+                'code': 404
+            }), 404
+        
+        # 根据处理状态计算进度
+        status = file_info.get('process_status', 'pending')
+        progress_data = _calculate_progress(status)
+        
+        return jsonify({
+            'success': True,
+            'message': '获取进度成功',
+            'data': {
+                'file_id': file_id,
+                'status': status,
+                'progress': progress_data['progress'],
+                'stage': progress_data['stage'],
+                'stage_name': progress_data['stage_name']
+            },
+            'code': 200
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"获取文件进度失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'获取文件进度失败: {str(e)}',
+            'code': 500
+        }), 500
+
+
+def _calculate_progress(status: str) -> Dict[str, Any]:
+    """
+    根据状态计算进度
+    
+    Args:
+        status: 处理状态
+        
+    Returns:
+        Dict[str, Any]: 进度信息
+    """
+    progress_map = {
+        'pending': {'progress': 10, 'stage': 'uploaded', 'stage_name': '文件已上传'},
+        'extracting': {'progress': 25, 'stage': 'extracting', 'stage_name': '内容提取中'},
+        'extracted': {'progress': 40, 'stage': 'extracted', 'stage_name': '内容提取完成'},
+        'vectorizing': {'progress': 55, 'stage': 'vectorizing', 'stage_name': '向量化处理中'},
+        'vectorized': {'progress': 70, 'stage': 'vectorized', 'stage_name': '向量化完成'},
+        'graph_processing': {'progress': 85, 'stage': 'graph_processing', 'stage_name': '知识图谱构建中'},
+        'completed': {'progress': 100, 'stage': 'completed', 'stage_name': '处理完成'},
+        'extract_failed': {'progress': 40, 'stage': 'extract_failed', 'stage_name': '内容提取失败'},
+        'vectorize_failed': {'progress': 70, 'stage': 'vectorize_failed', 'stage_name': '向量化失败'},
+        'graph_failed': {'progress': 85, 'stage': 'graph_failed', 'stage_name': '知识图谱构建失败'},
+        'process_failed': {'progress': 0, 'stage': 'process_failed', 'stage_name': '处理失败'}
+    }
+    
+    return progress_map.get(status, {'progress': 0, 'stage': 'unknown', 'stage_name': '未知状态'})
 
 
 @file_bp.errorhandler(400)

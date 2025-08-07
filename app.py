@@ -8,7 +8,7 @@ import os
 import sys
 import yaml
 import click
-from flask import jsonify
+from flask import jsonify, render_template, send_from_directory
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -39,7 +39,18 @@ app = create_app()
 @app.route('/')
 def index():
     """
-    首页路由
+    前端首页路由
+    
+    Returns:
+        HTML页面
+    """
+    return send_from_directory('templates/html', 'index.html')
+
+
+@app.route('/api')
+def api_index():
+    """
+    API首页路由
     
     Returns:
         JSON响应
@@ -55,6 +66,22 @@ def index():
             'docs': '/docs'
         }
     })
+
+
+@app.route('/static/css/<path:filename>')
+def css_files(filename):
+    """
+    CSS文件路由
+    """
+    return send_from_directory('templates/css', filename)
+
+
+@app.route('/static/js/<path:filename>')
+def js_files(filename):
+    """
+    JavaScript文件路由
+    """
+    return send_from_directory('templates/js', filename)
 
 
 @app.route('/health')
@@ -254,10 +281,10 @@ cli.add_command(run_server)
 
 
 if __name__ == '__main__':
-    # 检查Python版本
-    if sys.version_info < (3, 11):
-        print("错误: GraphRAG需要Python 3.11或更高版本")
-        sys.exit(1)
+    # 检查Python版本（暂时注释掉用于前端测试）
+    # if sys.version_info < (3, 11):
+    #     print("错误: GraphRAG需要Python 3.11或更高版本")
+    #     sys.exit(1)
     
     # 检查必要的目录
     required_dirs = ['config', 'logs', 'uploads', 'temp', 'processed']

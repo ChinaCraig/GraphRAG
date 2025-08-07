@@ -179,6 +179,8 @@ def register_blueprints(app):
         
     except Exception as e:
         app.logger.error(f"注册蓝图失败: {str(e)}")
+        # 在开发阶段，即使蓝图注册失败也继续运行（仅用于前端测试）
+        app.logger.warning("继续运行前端服务，但后端API可能不可用")
 
 
 def register_error_handlers(app):

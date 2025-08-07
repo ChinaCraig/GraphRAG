@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GraphRAG - 智能文档处理系统</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- 顶部菜单 -->
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <h1>GraphRAG</h1>
+            </div>
+            <nav class="nav-menu">
+                <button class="nav-item active" data-tab="document-management">文档管理</button>
+                <button class="nav-item" data-tab="intelligent-search">智能检索</button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <main class="main-content">
+        <!-- 文档管理页签 -->
+        <div id="document-management" class="tab-content active">
+            <!-- 工具栏 -->
+            <div class="toolbar">
+                <div class="toolbar-left">
+                    <button id="uploadBtn" class="btn btn-primary">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none">
+                            <path d="M12 2L12 16M12 2L8 6M12 2L16 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M3 16L3 20C3 20.5523 3.44772 21 4 21L20 21C20.5523 21 21 20.5523 21 20L21 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        上传文件
+                    </button>
+                    <button id="deleteSelectedBtn" class="btn btn-danger" disabled>
+                        <svg class="icon" viewBox="0 0 24 24" fill="none">
+                            <path d="M3 6L5 6M5 6L21 6M5 6L5 20C5 20.5523 5.44772 21 6 21L18 21C18.5523 21 19 20.5523 19 20L19 6M8 6L8 4C8 3.44772 8.44772 3 9 3L15 3C15.5523 3 16 3.44772 16 4L16 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        删除选中
+                    </button>
+                </div>
+                <div class="toolbar-right">
+                    <div class="search-box">
+                        <input type="text" id="searchInput" placeholder="按文件名搜索...">
+                        <button id="searchBtn" class="btn btn-secondary">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none">
+                                <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/>
+                                <path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 文件列表表格 -->
+            <div class="table-container">
+                <table class="file-table">
+                    <thead>
+                        <tr>
+                            <th class="checkbox-col">
+                                <input type="checkbox" id="selectAll">
+                            </th>
+                            <th>文档ID</th>
+                            <th>文件名</th>
+                            <th>文件类型</th>
+                            <th>文件大小</th>
+                            <th>上传时间</th>
+                            <th>处理状态</th>
+                            <th>处理时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fileTableBody">
+                        <!-- 文件列表将在这里动态加载 -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 分页 -->
+            <div class="pagination">
+                <button id="prevPage" class="btn btn-secondary">上一页</button>
+                <span id="pageInfo">第 1 页，共 1 页</span>
+                <button id="nextPage" class="btn btn-secondary">下一页</button>
+            </div>
+
+            <!-- 进度条模态框 -->
+            <div id="progressModal" class="modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>文件处理进度</h3>
+                    </div>
+                    <div class="modal-body">
+                        <div class="progress-container">
+                            <div class="progress-bar">
+                                <div id="progressFill" class="progress-fill"></div>
+                            </div>
+                            <div id="progressText" class="progress-text">0%</div>
+                        </div>
+                        <div id="progressStatus" class="progress-status">等待处理...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 智能检索页签 -->
+        <div id="intelligent-search" class="tab-content">
+            <div class="chat-container">
+                <!-- 聊天消息区域 -->
+                <div id="chatMessages" class="chat-messages">
+                    <div class="welcome-message">
+                        <h2>欢迎使用智能检索</h2>
+                        <p>您可以输入问题，系统会分析并返回相关的完整内容，包括文本、图表、图片、表格等。</p>
+                    </div>
+                </div>
+
+                <!-- 输入区域 -->
+                <div class="chat-input-container">
+                    <div class="chat-input-box">
+                        <textarea id="chatInput" placeholder="请输入您的问题..." rows="3"></textarea>
+                        <button id="sendBtn" class="btn btn-primary">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none">
+                                <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 文件上传模态框 -->
+    <div id="uploadModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>上传文件</h3>
+                <button class="close-btn" data-close="uploadModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="dropZone" class="drop-zone">
+                    <input type="file" id="fileInput" multiple accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.md">
+                    <div class="drop-zone-content">
+                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none">
+                            <path d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <polyline points="14,2 14,8 20,8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <polyline points="10,9 9,9 8,9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <p>点击选择文件或拖拽到此处</p>
+                        <small>支持 PDF、Word、Excel、PowerPoint、文本等格式</small>
+                    </div>
+                </div>
+                <div id="fileList" class="file-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-close="uploadModal">取消</button>
+                <button id="confirmUpload" class="btn btn-primary" disabled>开始上传</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载指示器 -->
+    <div id="loadingIndicator" class="loading-indicator">
+        <div class="spinner"></div>
+        <span>加载中...</span>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>
