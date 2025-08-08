@@ -8,9 +8,11 @@ import hashlib
 import logging
 import yaml
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
+import re
+import urllib.parse
 import json
 import threading
 
@@ -38,6 +40,38 @@ class FileService:
         
         # 创建必要的目录
         self._create_directories()
+
+    def _safe_filename(self, filename: str) -> str:
+        """
+        生成安全的文件名，支持中文字符
+        
+        Args:
+            filename: 原始文件名
+            
+        Returns:
+            str: 安全的文件名
+        """
+        if not filename:
+            return "unknown"
+        
+        # 移除路径分隔符和其他危险字符，但保留中文字符
+        dangerous_chars = r'[<>:"/\\|?*\x00-\x1f]'
+        safe_name = re.sub(dangerous_chars, '_', filename)
+        
+        # 移除开头和结尾的空格、点号
+        safe_name = safe_name.strip(' .')
+        
+        # 如果文件名为空或只有扩展名，使用默认名称
+        if not safe_name or safe_name.startswith('.'):
+            safe_name = f"file_{safe_name}" if safe_name.startswith('.') else "unknown_file"
+        
+        # 限制文件名长度（保留扩展名）
+        if len(safe_name) > 200:
+            name_part, ext_part = os.path.splitext(safe_name)
+            max_name_len = 200 - len(ext_part)
+            safe_name = name_part[:max_name_len] + ext_part
+        
+        return safe_name
     
     def _load_config(self) -> None:
         """加载配置文件"""
@@ -45,7 +79,24 @@ class FileService:
             with open(self.config_path, 'r', encoding='utf-8') as file:
                 config = yaml.safe_load(file)
                 self.file_config = config['file']
-                self.logger.info("文件服务配置加载成功")
+                
+                # 🔧 修复：将相对路径转换为绝对路径
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                
+                # 转换上传目录路径
+                upload_folder = self.file_config['upload_folder']
+                if not os.path.isabs(upload_folder):
+                    self.file_config['upload_folder'] = os.path.abspath(os.path.join(project_root, upload_folder))
+                
+                # 转换临时目录路径
+                temp_folder = self.file_config['temp_folder']
+                if not os.path.isabs(temp_folder):
+                    self.file_config['temp_folder'] = os.path.abspath(os.path.join(project_root, temp_folder))
+                
+                self.logger.info(f"文件服务配置加载成功")
+                self.logger.info(f"上传目录: {self.file_config['upload_folder']}")
+                self.logger.info(f"临时目录: {self.file_config['temp_folder']}")
+                
         except Exception as e:
             self.logger.error(f"加载文件服务配置失败: {str(e)}")
             raise
@@ -116,6 +167,12 @@ class FileService:
             Dict[str, Any]: 上传结果
         """
         try:
+            # 添加详细的调试信息
+            self.logger.info(f"=== 文件上传开始 ===")
+            self.logger.info(f"接收到的文件对象: {type(file)}")
+            self.logger.info(f"file.filename: '{file.filename}' (类型: {type(file.filename)})")
+            self.logger.info(f"file.filename原始字节: {repr(file.filename.encode('utf-8')) if file.filename else 'None'}")
+            
             # 检查文件是否存在
             if not file or file.filename == '':
                 return {
@@ -128,7 +185,7 @@ class FileService:
             if not self._is_allowed_file(file.filename):
                 return {
                     'success': False,
-                    'message': f'不支持的文件类型',
+                    'message': f'不支持的文件类型: {file.filename}',
                     'file_id': None
                 }
             
@@ -144,13 +201,24 @@ class FileService:
                     'file_id': None
                 }
             
-            # 生成安全的文件名
-            filename = secure_filename(file.filename)
-            file_ext = filename.rsplit('.', 1)[1].lower()
+            # 保存原始文件名（用于显示）
+            original_filename = file.filename
             
-            # 生成唯一文件名
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            unique_filename = f"{timestamp}_{filename}"
+            # 直接从原始文件名获取扩展名
+            if '.' in original_filename:
+                file_ext = original_filename.rsplit('.', 1)[1].lower()
+            else:
+                file_ext = ''
+            
+            # 记录调试信息
+            self.logger.info(f"上传文件调试信息 - 原始文件名: {original_filename}, 扩展名: {file_ext}")
+            
+            # 生成唯一的物理文件名
+            timestamp = datetime.now(timezone(timedelta(hours=8))).strftime('%Y%m%d_%H%M%S')
+            # 对于磁盘存储，使用更安全的文件名（英文+数字）
+            import hashlib
+            name_hash = hashlib.md5(original_filename.encode('utf-8')).hexdigest()[:8]
+            unique_filename = f"{timestamp}_{name_hash}.{file_ext}" if file_ext else f"{timestamp}_{name_hash}"
             
             # 根据文件类型选择子目录
             if file_ext in ['jpg', 'jpeg', 'png', 'gif', 'bmp']:
@@ -178,17 +246,20 @@ class FileService:
                     'duplicate': True
                 }
             
-            # 保存文件信息到数据库
+            # 保存文件信息到数据库（filename字段保存原始文件名用于显示）
             file_data = {
-                'filename': filename,
+                'filename': original_filename,  # 保存原始文件名（包含中文）
                 'file_path': file_path,
                 'file_type': file_ext,
                 'file_size': file_size,
-                'upload_time': datetime.now(),
+                'upload_time': datetime.now(timezone(timedelta(hours=8))),
                 'process_status': 'pending',
                 'content_hash': content_hash,
                 'metadata': json.dumps(metadata or {}, ensure_ascii=False)
             }
+            
+            # 调试：数据库存储前的数据
+            self.logger.info(f"准备存储到数据库的数据: filename='{file_data['filename']}', file_path='{file_data['file_path']}'")
             
             success = self.mysql_manager.insert_data('documents', file_data)
             
@@ -197,7 +268,7 @@ class FileService:
                 file_info = self._get_file_by_hash(content_hash)
                 file_id = file_info['id'] if file_info else None
                 
-                self.logger.info(f"文件上传成功: {filename}, ID: {file_id}")
+                self.logger.info(f"文件上传成功: {original_filename}, ID: {file_id}")
                 
                 # 异步启动处理流程
                 if file_ext == 'pdf':  # 只对PDF文件进行后续处理
@@ -290,7 +361,8 @@ class FileService:
     
     def get_file_list(self, page: int = 1, page_size: int = 20, 
                      file_type: Optional[str] = None, 
-                     process_status: Optional[str] = None) -> Dict[str, Any]:
+                     process_status: Optional[str] = None,
+                     filename: Optional[str] = None) -> Dict[str, Any]:
         """
         获取文件列表
         
@@ -299,6 +371,7 @@ class FileService:
             page_size: 每页数量
             file_type: 文件类型过滤
             process_status: 处理状态过滤
+            filename: 文件名模糊搜索（支持文件名、元数据等字段）
             
         Returns:
             Dict[str, Any]: 文件列表和分页信息
@@ -316,6 +389,16 @@ class FileService:
                 where_conditions.append("process_status = :process_status")
                 params['process_status'] = process_status
             
+            # 添加文件名模糊搜索（支持多字段搜索）
+            if filename:
+                # 支持文件名、元数据等字段的模糊搜索
+                search_conditions = [
+                    "filename LIKE :filename_search",
+                    "metadata LIKE :filename_search"
+                ]
+                where_conditions.append(f"({' OR '.join(search_conditions)})")
+                params['filename_search'] = f"%{filename}%"
+            
             where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
             
             # 计算总数
@@ -330,7 +413,7 @@ class FileService:
             
             # 查询文件列表
             list_query = f"""
-            SELECT id, filename, file_type, file_size, upload_time, process_status
+            SELECT id, filename, file_type, file_size, upload_time, process_status, process_time
             FROM documents 
             WHERE {where_clause}
             ORDER BY upload_time DESC
@@ -357,7 +440,7 @@ class FileService:
                 'total_pages': 0
             }
     
-    def update_file_status(self, file_id: int, status: str, process_time: Optional[datetime] = None) -> bool:
+    def update_file_status(self, file_id: int, status: str, process_time: Optional[datetime] = None, send_websocket: bool = True) -> bool:
         """
         更新文件处理状态
         
@@ -374,7 +457,7 @@ class FileService:
             if process_time:
                 update_data['process_time'] = process_time
             else:
-                update_data['process_time'] = datetime.now()
+                update_data['process_time'] = datetime.now(timezone(timedelta(hours=8)))
             
             success = self.mysql_manager.update_data(
                 'documents',
@@ -385,12 +468,69 @@ class FileService:
             
             if success:
                 self.logger.info(f"文件状态更新成功，ID: {file_id}, 状态: {status}")
+                
+                # 发送WebSocket进度更新
+                if send_websocket:
+                    self._send_progress_update(file_id, status, process_time)
             
             return success
             
         except Exception as e:
             self.logger.error(f"更新文件状态失败: {str(e)}")
             return False
+    
+    def _send_progress_update(self, file_id: int, status: str, process_time: Optional[datetime] = None):
+        """
+        发送WebSocket进度更新
+        
+        Args:
+            file_id: 文件ID
+            status: 处理状态
+            process_time: 处理时间
+        """
+        try:
+            from app.utils.websocket import send_file_progress
+            
+            # 计算进度数据
+            progress_data = self._calculate_progress(status)
+            
+            # 添加时间戳
+            if process_time:
+                progress_data['timestamp'] = process_time.isoformat()
+            else:
+                progress_data['timestamp'] = datetime.now(timezone(timedelta(hours=8))).isoformat()
+            
+            # 发送WebSocket消息
+            send_file_progress(file_id, progress_data)
+            
+        except Exception as e:
+            self.logger.error(f"发送WebSocket进度更新失败: {str(e)}")
+    
+    def _calculate_progress(self, status: str) -> Dict[str, Any]:
+        """
+        根据状态计算进度
+        
+        Args:
+            status: 处理状态
+            
+        Returns:
+            Dict[str, Any]: 进度信息
+        """
+        progress_map = {
+            'pending': {'progress': 10, 'stage': 'uploaded', 'stage_name': '文件已上传'},
+            'extracting': {'progress': 25, 'stage': 'extracting', 'stage_name': '内容提取中'},
+            'extracted': {'progress': 40, 'stage': 'extracted', 'stage_name': '内容提取完成'},
+            'vectorizing': {'progress': 55, 'stage': 'vectorizing', 'stage_name': '向量化处理中'},
+            'vectorized': {'progress': 70, 'stage': 'vectorized', 'stage_name': '向量化完成'},
+            'graph_processing': {'progress': 85, 'stage': 'graph_processing', 'stage_name': '知识图谱构建中'},
+            'completed': {'progress': 100, 'stage': 'completed', 'stage_name': '处理完成'},
+            'extract_failed': {'progress': 40, 'stage': 'extract_failed', 'stage_name': '内容提取失败'},
+            'vectorize_failed': {'progress': 70, 'stage': 'vectorize_failed', 'stage_name': '向量化失败'},
+            'graph_failed': {'progress': 85, 'stage': 'graph_failed', 'stage_name': '知识图谱构建失败'},
+            'process_failed': {'progress': 0, 'stage': 'process_failed', 'stage_name': '处理失败'}
+        }
+        
+        return progress_map.get(status, {'progress': 0, 'stage': 'unknown', 'stage_name': '未知状态'})
     
     def delete_file(self, file_id: int) -> bool:
         """
@@ -481,7 +621,7 @@ class FileService:
             if not os.path.exists(temp_folder):
                 return 0
             
-            current_time = datetime.now()
+            current_time = datetime.now(timezone(timedelta(hours=8)))
             max_age_seconds = max_age_hours * 3600
             cleaned_count = 0
             

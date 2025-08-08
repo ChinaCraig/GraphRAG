@@ -4,7 +4,8 @@
 """
 
 import logging
-from flask import Blueprint, request, jsonify, current_app
+import os
+from flask import Blueprint, request, jsonify, current_app, send_file, send_from_directory, Response
 from werkzeug.utils import secure_filename
 import json
 from datetime import datetime
@@ -102,6 +103,7 @@ def get_file_list():
         page_size = request.args.get('page_size', 20, type=int)
         file_type = request.args.get('file_type', None)
         process_status = request.args.get('process_status', None)
+        filename = request.args.get('filename', None)
         
         # 参数验证
         if page < 1:
@@ -114,7 +116,8 @@ def get_file_list():
             page=page,
             page_size=page_size,
             file_type=file_type,
-            process_status=process_status
+            process_status=process_status,
+            filename=filename
         )
         
         return jsonify({
@@ -641,6 +644,155 @@ def _calculate_progress(status: str) -> Dict[str, Any]:
     }
     
     return progress_map.get(status, {'progress': 0, 'stage': 'unknown', 'stage_name': '未知状态'})
+
+
+@file_bp.route('/<int:file_id>/preview', methods=['GET'])
+def preview_file(file_id):
+    """
+    文件预览接口
+    
+    Args:
+        file_id: 文件ID
+        
+    Returns:
+        文件内容或预览数据
+    """
+    try:
+        # 获取文件信息
+        file_info = file_service.get_file_info(file_id)
+        if not file_info:
+            return jsonify({
+                'success': False,
+                'message': '文件不存在',
+                'code': 404
+            }), 404
+        
+        file_path = file_info.get('file_path')
+        file_type = file_info.get('file_type', '').lower()
+        
+        # 🔧 修复：处理相对路径问题，确保兼容性
+        if not os.path.isabs(file_path):
+            # 如果是相对路径，转换为绝对路径
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            file_path = os.path.abspath(os.path.join(project_root, file_path))
+            logger.info(f"转换相对路径为绝对路径: {file_path}")
+        
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            return jsonify({
+                'success': False,
+                'message': '文件已被移动或删除',
+                'code': 404
+            }), 404
+        
+        # 根据文件类型返回不同的预览内容
+        if file_type == 'pdf':
+            # PDF文件直接返回文件流供PDF.js渲染
+            return send_file(
+                file_path,
+                mimetype='application/pdf',
+                as_attachment=False
+            )
+        elif file_type in ['txt', 'md', 'log']:
+            # 文本文件返回内容
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'content': content,
+                        'file_type': 'text'
+                    },
+                    'code': 200
+                })
+            except UnicodeDecodeError:
+                # 尝试其他编码
+                with open(file_path, 'r', encoding='gbk') as f:
+                    content = f.read()
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'content': content,
+                        'file_type': 'text'
+                    },
+                    'code': 200
+                })
+        elif file_type in ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']:
+            # 图片文件直接返回
+            return send_file(
+                file_path,
+                as_attachment=False
+            )
+        else:
+            return jsonify({
+                'success': False,
+                'message': f'不支持预览的文件类型: {file_type}',
+                'code': 400
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"文件预览失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'文件预览失败: {str(e)}',
+            'code': 500
+        }), 500
+
+
+@file_bp.route('/<int:file_id>/download', methods=['GET'])
+def download_file(file_id):
+    """
+    文件下载接口
+    
+    Args:
+        file_id: 文件ID
+        
+    Returns:
+        文件下载响应
+    """
+    try:
+        # 获取文件信息
+        file_info = file_service.get_file_info(file_id)
+        if not file_info:
+            return jsonify({
+                'success': False,
+                'message': '文件不存在',
+                'code': 404
+            }), 404
+        
+        file_path = file_info.get('file_path')
+        filename = file_info.get('filename', 'unknown_file')
+        
+        # 🔧 修复：处理相对路径问题，确保兼容性
+        if not os.path.isabs(file_path):
+            # 如果是相对路径，转换为绝对路径
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            file_path = os.path.abspath(os.path.join(project_root, file_path))
+            logger.info(f"转换相对路径为绝对路径: {file_path}")
+        
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            return jsonify({
+                'success': False,
+                'message': '文件已被移动或删除',
+                'code': 404
+            }), 404
+        
+        # 返回文件下载
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=filename
+        )
+            
+    except Exception as e:
+        logger.error(f"文件下载失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'文件下载失败: {str(e)}',
+            'code': 500
+        }), 500
 
 
 @file_bp.errorhandler(400)

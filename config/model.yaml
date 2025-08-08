@@ -33,6 +33,13 @@ embedding:
     max_chunk_size: 2000                               # 文本分块最大大小
     chunk_overlap: 50                                 # 分块重叠大小
 
+# 查询优化配置
+query_optimization:
+  enabled: true                                       # 是否启用查询优化功能
+  fallback_on_failure: true                          # 优化失败时是否降级为原始查询
+  cache_optimization_results: false                   # 是否缓存优化结果（暂未实现）
+  log_optimization_details: true                     # 是否记录优化详情到日志
+
 # 模型通用配置
 general:
   model_cache_size: 100                               # 模型缓存大小(MB)

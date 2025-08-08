@@ -8,7 +8,10 @@ import os
 import sys
 import yaml
 import click
-from flask import jsonify, render_template, send_from_directory
+
+
+# 设置环境变量以避免tokenizers并行化警告
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,130 +39,6 @@ def load_server_config():
 app = create_app()
 
 
-@app.route('/')
-def index():
-    """
-    前端首页路由
-    
-    Returns:
-        HTML页面
-    """
-    return send_from_directory('templates/html', 'index.html')
-
-
-@app.route('/api')
-def api_index():
-    """
-    API首页路由
-    
-    Returns:
-        JSON响应
-    """
-    return jsonify({
-        'success': True,
-        'message': 'GraphRAG服务运行正常',
-        'version': '1.0.0',
-        'endpoints': {
-            'file_management': '/api/file/',
-            'search': '/api/search/',
-            'health': '/health',
-            'docs': '/docs'
-        }
-    })
-
-
-@app.route('/static/css/<path:filename>')
-def css_files(filename):
-    """
-    CSS文件路由
-    """
-    return send_from_directory('templates/css', filename)
-
-
-@app.route('/static/js/<path:filename>')
-def js_files(filename):
-    """
-    JavaScript文件路由
-    """
-    return send_from_directory('templates/js', filename)
-
-
-@app.route('/health')
-def health_check():
-    """
-    健康检查路由
-    
-    Returns:
-        JSON响应
-    """
-    try:
-        # 这里可以添加数据库连接检查等健康检查逻辑
-        health_status = {
-            'status': 'healthy',
-            'timestamp': '2024-01-01T00:00:00Z',
-            'checks': {
-                'database': 'ok',
-                'vector_db': 'ok',
-                'graph_db': 'ok'
-            }
-        }
-        
-        return jsonify({
-            'success': True,
-            'data': health_status
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'健康检查失败: {str(e)}',
-            'status': 'unhealthy'
-        }), 500
-
-
-@app.route('/docs')
-def api_docs():
-    """
-    API文档路由
-    
-    Returns:
-        JSON响应
-    """
-    docs = {
-        'title': 'GraphRAG API Documentation',
-        'version': '1.0.0',
-        'description': '基于知识图谱的检索增强生成系统API',
-        'endpoints': {
-            'file_management': {
-                'POST /api/file/upload': '上传文件',
-                'GET /api/file/list': '获取文件列表',
-                'GET /api/file/<id>': '获取文件详情',
-                'DELETE /api/file/<id>': '删除文件',
-                'POST /api/file/<id>/process': '处理文件',
-                'GET /api/file/stats': '获取文件统计',
-                'POST /api/file/cleanup': '清理临时文件'
-            },
-            'search': {
-                'POST /api/search/vector': '向量搜索',
-                'POST /api/search/graph': '图谱搜索',
-                'POST /api/search/hybrid': '混合搜索',
-                'POST /api/search/semantic': '语义搜索',
-                'POST /api/search/qa': '智能问答',
-                'GET /api/search/suggestions': '搜索建议',
-                'GET /api/search/history': '搜索历史',
-                'GET /api/search/stats': '搜索统计'
-            },
-            'system': {
-                'GET /': '系统信息',
-                'GET /health': '健康检查',
-                'GET /docs': 'API文档'
-            }
-        }
-    }
-    
-    return jsonify(docs)
-
-
 @click.command()
 @click.option('--host', default=None, help='服务器监听地址')
 @click.option('--port', default=None, type=int, help='服务器监听端口')
@@ -185,17 +64,21 @@ def run_server(host, port, debug, config):
         debug = debug or server_config.get('debug', False)
         
         print(f"启动GraphRAG服务器...")
-        print(f"监听地址: {host}:{port}")
+        print(f"WebSocket支持: 已启用")
+        print(f"监听地址: http://{host}:{port}")
         print(f"调试模式: {debug}")
         print(f"配置文件: {config}")
+        print(f"API文档: http://{host}:{port}/docs")
         print("-" * 50)
         
-        # 启动服务器
-        app.run(
+        # 获取SocketIO实例并启动服务器（支持WebSocket）
+        socketio = app.socketio
+        socketio.run(
+            app,
             host=host,
             port=port,
             debug=debug,
-            threaded=True
+            allow_unsafe_werkzeug=True
         )
         
     except Exception as e:
@@ -281,37 +164,56 @@ cli.add_command(run_server)
 
 
 if __name__ == '__main__':
-    # 检查Python版本（暂时注释掉用于前端测试）
-    # if sys.version_info < (3, 11):
-    #     print("错误: GraphRAG需要Python 3.11或更高版本")
-    #     sys.exit(1)
-    
     # 检查必要的目录
-    required_dirs = ['config', 'logs', 'uploads', 'temp', 'processed']
+    required_dirs = ['config', 'temp']
     for directory in required_dirs:
         if not os.path.exists(directory):
             os.makedirs(directory, exist_ok=True)
     
-    # 如果没有参数，显示帮助或启动服务器
-    if len(sys.argv) == 1:
-        # 直接启动服务器
+    # 检查是否是直接启动参数
+    direct_params = ['--port', '--host', '--debug']
+    has_direct_params = any(param in sys.argv for param in direct_params)
+    
+    # 如果没有参数或者有直接启动参数，启动服务器
+    if len(sys.argv) == 1 or has_direct_params:
+        # 解析直接参数
+        host = None
+        port = None
+        debug = False
+        
+        try:
+            for i, arg in enumerate(sys.argv):
+                if arg == '--host' and i + 1 < len(sys.argv):
+                    host = sys.argv[i + 1]
+                elif arg == '--port' and i + 1 < len(sys.argv):
+                    port = int(sys.argv[i + 1])
+                elif arg == '--debug':
+                    debug = True
+        except (ValueError, IndexError):
+            print("参数错误，使用默认配置启动")
+        
+        # 使用配置文件的默认值
         server_config = load_server_config()
-        host = server_config.get('host', '0.0.0.0')
-        port = server_config.get('port', 5000)
-        debug = server_config.get('debug', False)
+        host = host or server_config.get('host', '0.0.0.0')
+        port = port or server_config.get('port', 5000)
+        debug = debug or server_config.get('debug', False)
         
         print(f"启动GraphRAG服务器...")
-        print(f"监听地址: {host}:{port}")
+        print(f"WebSocket支持: 已启用")
+        print(f"监听地址: http://{host}:{port}")
         print(f"调试模式: {debug}")
         print(f"API文档: http://{host}:{port}/docs")
         print("-" * 50)
         
         try:
-            app.run(
+            # 获取SocketIO实例并启动服务器（支持WebSocket）
+            socketio = app.socketio
+            socketio.run(
+                app,
                 host=host,
                 port=port,
                 debug=debug,
-                threaded=True
+                allow_unsafe_werkzeug=True
             )
         except KeyboardInterrupt:
             print("\n服务器已停止")
@@ -319,5 +221,5 @@ if __name__ == '__main__':
             print(f"启动服务器失败: {str(e)}")
             sys.exit(1)
     else:
-        # 使用CLI
+        # 使用CLI子命令
         cli()
