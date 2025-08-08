@@ -538,14 +538,17 @@ class GraphRAGApp {
             return;
         }
 
+        // 🔧 修复：先保存要上传的文件列表，避免在hideModal中被清空
+        const filesToUpload = [...this.uploadFiles];
+        const totalFiles = filesToUpload.length;
+
         // 关闭上传模态框，回到文件列表
         this.hideModal('uploadModal');
 
         let completedFiles = 0;
-        const totalFiles = this.uploadFiles.length;
 
         // 逐个上传文件
-        for (const file of this.uploadFiles) {
+        for (const file of filesToUpload) {
             try {
                 console.log(`正在上传文件: ${file.name}`);
                 const result = await this.uploadSingleFile(file);
@@ -563,9 +566,6 @@ class GraphRAGApp {
         }
 
         console.log(`所有文件上传完成，成功: ${completedFiles}/${totalFiles}`);
-        
-        // 清空上传文件列表
-        this.uploadFiles = [];
         
         // 显示完成提示
         this.showToast(`文件上传完成，成功上传 ${completedFiles}/${totalFiles} 个文件`, 'success');

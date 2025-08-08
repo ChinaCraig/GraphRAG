@@ -3,10 +3,10 @@
 
 # MySQL数据库配置
 mysql:
-  host: "192.168.2.202"        # MySQL服务器地址
+  host: "192.168.16.26"        # MySQL服务器地址
   port: 3306                   # MySQL服务器端口
   username: "root"             # MySQL用户名
-  password: "zhang"        # MySQL密码
+  password: "!200808Xx"        # MySQL密码
   database: "graph_rag"        # 数据库名称
   charset: "utf8mb4"           # 字符集
   pool_size: 10                # 连接池大小
@@ -17,7 +17,7 @@ mysql:
 
 # Milvus向量数据库配置
 milvus:
-  host: "192.168.2.202"        # Milvus服务器地址
+  host: "192.168.16.26"        # Milvus服务器地址
   port: 19530                  # Milvus服务器端口
   database: "graph_rag"        # Milvus数据库名称
   collection: "graph_rag"      # Milvus集合名称
@@ -29,9 +29,9 @@ milvus:
 
 # Neo4j图数据库配置
 neo4j:
-  uri: "bolt://192.168.2.202:7687"  # Neo4j连接URI
+  uri: "bolt://192.168.16.26:7687"  # Neo4j连接URI
   username: "neo4j"                 # Neo4j用户名
-  password: "zhang123456"            # Neo4j密码
+  password: "!200808Xx"            # Neo4j密码
   database: "neo4j"                # Neo4j数据库名称
   max_connection_lifetime: 3600     # 连接最大生存时间(秒)
   max_connection_pool_size: 50      # 连接池最大大小

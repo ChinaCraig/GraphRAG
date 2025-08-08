@@ -552,9 +552,17 @@ class FileService:
             self.update_file_status(file_id, 'vectorized')
             self.logger.info(f"文件向量化完成，ID: {file_id}")
             
+            # 🔧 修复：获取向量化过程中生成的content_units.json文件
+            content_units_file_path = self._get_content_units_file_path(file_path, file_id)
+            if not content_units_file_path or not os.path.exists(content_units_file_path):
+                self.logger.warning(f"未找到content_units文件，使用原始JSON文件进行图谱构建，ID: {file_id}")
+                content_units_file_path = json_file_path  # 回退到原始文件
+            else:
+                self.logger.info(f"找到content_units文件: {content_units_file_path}")
+            
             # 步骤3：知识图谱构建 (70% -> 100%)
             self.update_file_status(file_id, 'graph_processing')
-            graph_result = pdf_graph_service.process_pdf_json_to_graph(json_file_path, file_id)
+            graph_result = pdf_graph_service.process_pdf_json_to_graph(content_units_file_path, file_id)
             
             if not graph_result['success']:
                 self.update_file_status(file_id, 'graph_failed')
@@ -586,10 +594,11 @@ class FileService:
             filename = os.path.basename(pdf_file_path)
             name_without_ext = os.path.splitext(filename)[0]
             
-            # 尝试多种可能的JSON文件名
+            # 🔧 修复：使用正确的文件ID生成文件名
             possible_names = [
-                f"{name_without_ext}_doc_1.json",
-                f"{name_without_ext}_content_units.json"
+                f"{name_without_ext}_doc_{file_id}.json",  # 使用实际的file_id
+                f"{name_without_ext}_content_units.json",
+                f"{name_without_ext}_doc_1.json"  # 保留兼容性
             ]
             
             json_dir = os.path.join(self.file_config['upload_folder'], 'json')
@@ -597,10 +606,53 @@ class FileService:
             for json_name in possible_names:
                 json_path = os.path.join(json_dir, json_name)
                 if os.path.exists(json_path):
+                    self.logger.info(f"找到JSON文件: {json_path}")
                     return json_path
             
+            # 🔧 增强：如果找不到，记录详细信息
+            self.logger.warning(f"在目录 {json_dir} 中找不到以下任何文件: {possible_names}")
             return None
             
         except Exception as e:
             self.logger.error(f"获取JSON文件路径失败: {str(e)}")
+            return None
+    
+    def _get_content_units_file_path(self, pdf_file_path: str, file_id: int) -> Optional[str]:
+        """
+        获取向量化过程中生成的content_units.json文件路径
+        
+        Args:
+            pdf_file_path: PDF文件路径
+            file_id: 文件ID
+            
+        Returns:
+            Optional[str]: content_units.json文件路径
+        """
+        try:
+            # 根据PDF文件路径推测content_units.json文件路径
+            filename = os.path.basename(pdf_file_path)
+            name_without_ext = os.path.splitext(filename)[0]
+            
+            # content_units.json文件命名格式
+            possible_names = [
+                f"{name_without_ext}_content_units.json",  # 主要格式
+                f"{name_without_ext.split('_', 2)[-1]}_content_units.json" if '_' in name_without_ext else None  # 去除时间戳前缀
+            ]
+            
+            # 过滤掉None值
+            possible_names = [name for name in possible_names if name]
+            
+            json_dir = os.path.join(self.file_config['upload_folder'], 'json')
+            
+            for json_name in possible_names:
+                json_path = os.path.join(json_dir, json_name)
+                if os.path.exists(json_path):
+                    self.logger.info(f"找到content_units文件: {json_path}")
+                    return json_path
+            
+            self.logger.debug(f"在目录 {json_dir} 中找不到content_units文件: {possible_names}")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"获取content_units文件路径失败: {str(e)}")
             return None
