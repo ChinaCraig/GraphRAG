@@ -219,24 +219,25 @@ class PdfGraphService:
             mentions = []
             
             # 定义实体词典（规则+词典方法）
+            # 注意：中文模式不使用\b边界，英文模式保留\b边界
             entity_patterns = {
                 'CellLine': [
-                    r'\bCHO-K1\b', r'\bCHO\s*K1\b', r'\bCHO细胞\b', r'\bCHO\b',
+                    r'CHO-K1', r'CHO\s*K1', r'CHO细胞', r'CHO',
                     r'\bHEK293\b', r'\bHEK\s*293\b', r'\bVero\b', r'\bMDCK\b'
                 ],
                 'Protein': [
-                    r'\bHCP\b', r'\b宿主蛋白\b', r'\b宿主细胞蛋白\b', r'\bHost\s*Cell\s*Protein\b',
-                    r'\b蛋白质\b', r'\b蛋白\b', r'\bprotein\b'
+                    r'\bHCP\b', r'宿主蛋白', r'宿主细胞蛋白', r'\bHost\s*Cell\s*Protein\b',
+                    r'蛋白质', r'蛋白', r'\bprotein\b'
                 ],
                 'Analyte': [
-                    r'\bHCP\b', r'\b分析物\b', r'\b待测物\b', r'\banalyte\b'
+                    r'\bHCP\b', r'分析物', r'待测物', r'\banalyte\b'
                 ],
                 'Reagent': [
-                    r'\b抗体\b', r'\bantibody\b', r'\bAb\b', r'\bmAb\b', r'\b单抗\b', r'\b单克隆抗体\b',
-                    r'\b试剂\b', r'\breagent\b', r'\b缓冲液\b', r'\bbuffer\b'
+                    r'抗体', r'\bantibody\b', r'\bAb\b', r'\bmAb\b', r'单抗', r'单克隆抗体',
+                    r'试剂', r'\breagent\b', r'缓冲液', r'\bbuffer\b'
                 ],
                 'Product': [
-                    r'\b试剂盒\b', r'\bkit\b', r'\bassay\b', r'\b检测试剂盒\b', r'\b检测kit\b',
+                    r'试剂盒', r'\bkit\b', r'\bassay\b', r'检测试剂盒', r'检测kit',
                     r'\bELISA\b', r'\bWestern\b', r'\b2D\s*Gel\b'
                 ]
             }
@@ -584,120 +585,318 @@ class PdfGraphService:
             }
 
 
-def _create_section_node(self, section, document_id):
-    """创建Section节点 - 使用MySQL简化实现"""
-    try:
-        section_data = {
-            'document_id': document_id,
-            'section_id': section.get('section_id', ''),
-            'title': section.get('title', ''),
-            'node_type': 'Section'
-        }
-        return self.mysql_manager.insert_data('graph_nodes', section_data)
-    except:
-        return False
-
-
-def _create_block_node(self, block, section_id, document_id):
-    """创建Block节点"""
-    try:
-        block_data = {
-            'document_id': document_id,
-            'elem_id': block.get('elem_id', ''),
-            'section_id': section_id,
-            'node_type': 'Block'
-        }
-        return self.mysql_manager.insert_data('graph_nodes', block_data)
-    except:
-        return False
-
-
-def _create_entity_node(self, mention, document_id):
-    """创建Entity节点"""
-    try:
-        entity_data = {
-            'document_id': document_id,
-            'entity_uid': mention.get('entity_uid', ''),
-            'name': mention.get('normalized_name', ''),
-            'entity_type': mention.get('entity_type', ''),
-            'node_type': 'Entity'
-        }
-        return self.mysql_manager.insert_data('graph_nodes', entity_data)
-    except:
-        return False
-
-
-def _create_claim_node(self, mention, document_id):
-    """创建Claim节点"""
-    try:
-        if mention.get('mention_type') != 'metric':
+    def _create_section_node(self, section, document_id):
+        """创建Section节点 - 双写到MySQL和Neo4j"""
+        try:
+            section_id = section.get('section_id', '')
+            title = section.get('title', '')
+            
+            # MySQL数据
+            section_data = {
+                'document_id': document_id,
+                'section_id': section_id,
+                'title': title,
+                'node_type': 'Section'
+            }
+            mysql_success = self.mysql_manager.insert_data('graph_nodes', section_data)
+            
+            # Neo4j数据
+            neo4j_success = True
+            try:
+                neo4j_properties = {
+                    'section_id': section_id,
+                    'title': title,
+                    'document_id': document_id,
+                    'node_type': 'Section',
+                    'created_at': datetime.now().isoformat()
+                }
+                neo4j_node_id = self.neo4j_manager.create_node('Section', neo4j_properties)
+                neo4j_success = neo4j_node_id is not None
+                self.logger.debug(f"Neo4j Section节点创建: {neo4j_success}, ID: {neo4j_node_id}")
+            except Exception as e:
+                self.logger.warning(f"Neo4j Section节点创建失败: {e}")
+                neo4j_success = False
+            
+            # 只要MySQL成功就认为成功（Neo4j是辅助存储）
+            return mysql_success
+            
+        except Exception as e:
+            self.logger.error(f"创建Section节点失败: {e}")
             return False
-        claim_data = {
-            'document_id': document_id,
-            'claim_id': f"claim_{document_id}_{hash(mention.get('span_text', '')) % 10000}",
-            'metric_type': mention.get('metric_type', ''),
-            'node_type': 'Claim'
-        }
-        return self.mysql_manager.insert_data('graph_nodes', claim_data)
-    except:
-        return False
 
+    def _create_block_node(self, block, section_id, document_id):
+        """创建Block节点 - 双写到MySQL和Neo4j"""
+        try:
+            elem_id = block.get('elem_id', '')
+            block_type = block.get('type', '')
+            
+            # MySQL数据
+            block_data = {
+                'document_id': document_id,
+                'elem_id': elem_id,
+                'section_id': section_id,
+                'node_type': 'Block'
+            }
+            mysql_success = self.mysql_manager.insert_data('graph_nodes', block_data)
+            
+            # Neo4j数据
+            try:
+                neo4j_properties = {
+                    'elem_id': elem_id,
+                    'section_id': section_id,
+                    'block_type': block_type,
+                    'document_id': document_id,
+                    'node_type': 'Block',
+                    'created_at': datetime.now().isoformat()
+                }
+                neo4j_node_id = self.neo4j_manager.create_node('Block', neo4j_properties)
+                self.logger.debug(f"Neo4j Block节点创建: {neo4j_node_id is not None}, ID: {neo4j_node_id}")
+            except Exception as e:
+                self.logger.warning(f"Neo4j Block节点创建失败: {e}")
+            
+            return mysql_success
+            
+        except Exception as e:
+            self.logger.error(f"创建Block节点失败: {e}")
+            return False
 
-def _create_mentions_relation(self, mention, document_id):
-    """创建MENTIONS关系"""
-    try:
-        relation_data = {
-            'document_id': document_id,
-            'source_id': mention.get('elem_id', ''),
-            'target_id': mention.get('entity_uid', ''),
-            'relation_type': 'MENTIONS'
-        }
-        return self.mysql_manager.insert_data('graph_relations', relation_data)
-    except:
-        return False
+    def _create_entity_node(self, mention, document_id):
+        """创建Entity节点 - 双写到MySQL和Neo4j"""
+        try:
+            entity_uid = mention.get('entity_uid', '')
+            name = mention.get('normalized_name', '')
+            entity_type = mention.get('entity_type', '')
+            span_text = mention.get('span_text', '')
+            
+            # MySQL数据
+            entity_data = {
+                'document_id': document_id,
+                'entity_uid': entity_uid,
+                'name': name,
+                'entity_type': entity_type,
+                'node_type': 'Entity'
+            }
+            mysql_success = self.mysql_manager.insert_data('graph_nodes', entity_data)
+            
+            # Neo4j数据
+            try:
+                # 使用entity_type作为Neo4j标签，如果为空则使用Entity
+                neo4j_label = entity_type if entity_type else 'Entity'
+                neo4j_properties = {
+                    'entity_uid': entity_uid,
+                    'name': name,
+                    'entity_type': entity_type,
+                    'span_text': span_text,
+                    'document_id': document_id,
+                    'node_type': 'Entity',
+                    'created_at': datetime.now().isoformat()
+                }
+                neo4j_node_id = self.neo4j_manager.create_node(neo4j_label, neo4j_properties)
+                self.logger.debug(f"Neo4j Entity节点创建: {neo4j_node_id is not None}, 标签: {neo4j_label}, ID: {neo4j_node_id}")
+            except Exception as e:
+                self.logger.warning(f"Neo4j Entity节点创建失败: {e}")
+            
+            return mysql_success
+            
+        except Exception as e:
+            self.logger.error(f"创建Entity节点失败: {e}")
+            return False
 
+    def _create_claim_node(self, mention, document_id):
+        """创建Claim节点 - 双写到MySQL和Neo4j"""
+        try:
+            if mention.get('mention_type') != 'metric':
+                return False
+                
+            claim_id = f"claim_{document_id}_{hash(mention.get('span_text', '')) % 10000}"
+            metric_type = mention.get('metric_type', '')
+            span_text = mention.get('span_text', '')
+            
+            # MySQL数据
+            claim_data = {
+                'document_id': document_id,
+                'claim_id': claim_id,
+                'metric_type': metric_type,
+                'node_type': 'Claim'
+            }
+            mysql_success = self.mysql_manager.insert_data('graph_nodes', claim_data)
+            
+            # Neo4j数据
+            try:
+                neo4j_properties = {
+                    'claim_id': claim_id,
+                    'metric_type': metric_type,
+                    'span_text': span_text,
+                    'document_id': document_id,
+                    'node_type': 'Claim',
+                    'created_at': datetime.now().isoformat()
+                }
+                neo4j_node_id = self.neo4j_manager.create_node('Claim', neo4j_properties)
+                self.logger.debug(f"Neo4j Claim节点创建: {neo4j_node_id is not None}, ID: {neo4j_node_id}")
+            except Exception as e:
+                self.logger.warning(f"Neo4j Claim节点创建失败: {e}")
+            
+            return mysql_success
+            
+        except Exception as e:
+            self.logger.error(f"创建Claim节点失败: {e}")
+            return False
 
-def _create_has_entity_relation(self, section_id, mention, document_id):
-    """创建HAS_ENTITY关系"""
-    try:
-        relation_data = {
-            'document_id': document_id,
-            'source_id': section_id,
-            'target_id': mention.get('entity_uid', ''),
-            'relation_type': 'HAS_ENTITY'
-        }
-        return self.mysql_manager.insert_data('graph_relations', relation_data)
-    except:
-        return False
-
-
-def _create_semantic_relations(self, mentions, document_id):
-    """创建语义关系"""
-    try:
-        relations_count = 0
-        # 简化实现：在同一section内的Product和Analyte之间创建MEASURES关系
-        sections_mentions = {}
-        for mention in mentions:
-            section_id = mention.get('section_id', '')
-            if section_id not in sections_mentions:
-                sections_mentions[section_id] = []
-            sections_mentions[section_id].append(mention)
-
-        for section_mentions in sections_mentions.values():
-            products = [m for m in section_mentions if m.get('entity_type') == 'Product']
-            analytes = [m for m in section_mentions if m.get('entity_type') == 'Analyte']
-
-            for product in products:
-                for analyte in analytes:
-                    relation_data = {
+    def _create_mentions_relation(self, mention, document_id):
+        """创建MENTIONS关系 - 双写到MySQL和Neo4j"""
+        try:
+            source_id = mention.get('elem_id', '')
+            target_id = mention.get('entity_uid', '')
+            
+            # MySQL数据
+            relation_data = {
+                'document_id': document_id,
+                'source_id': source_id,
+                'target_id': target_id,
+                'relation_type': 'MENTIONS'
+            }
+            mysql_success = self.mysql_manager.insert_data('graph_relations', relation_data)
+            
+            # Neo4j数据
+            try:
+                # 查找源节点（Block）
+                source_nodes = self.neo4j_manager.find_nodes('Block', {'elem_id': source_id, 'document_id': document_id})
+                # 查找目标节点（Entity）
+                entity_type = mention.get('entity_type', '')
+                target_label = entity_type if entity_type else 'Entity'
+                target_nodes = self.neo4j_manager.find_nodes(target_label, {'entity_uid': target_id, 'document_id': document_id})
+                
+                if source_nodes and target_nodes:
+                    source_node_id = source_nodes[0]['node_id']
+                    target_node_id = target_nodes[0]['node_id']
+                    
+                    relation_properties = {
                         'document_id': document_id,
-                        'source_id': product.get('entity_uid', ''),
-                        'target_id': analyte.get('entity_uid', ''),
-                        'relation_type': 'MEASURES'
+                        'created_at': datetime.now().isoformat()
                     }
-                    if self.mysql_manager.insert_data('graph_relations', relation_data):
-                        relations_count += 1
+                    
+                    neo4j_success = self.neo4j_manager.create_relationship(
+                        source_node_id, target_node_id, 'MENTIONS', relation_properties
+                    )
+                    self.logger.debug(f"Neo4j MENTIONS关系创建: {neo4j_success}")
+                else:
+                    self.logger.warning(f"Neo4j MENTIONS关系创建失败: 找不到源节点或目标节点")
+            except Exception as e:
+                self.logger.warning(f"Neo4j MENTIONS关系创建失败: {e}")
+            
+            return mysql_success
+            
+        except Exception as e:
+            self.logger.error(f"创建MENTIONS关系失败: {e}")
+            return False
 
-        return relations_count
-    except:
-        return 0
+    def _create_has_entity_relation(self, section_id, mention, document_id):
+        """创建HAS_ENTITY关系 - 双写到MySQL和Neo4j"""
+        try:
+            target_id = mention.get('entity_uid', '')
+            
+            # MySQL数据
+            relation_data = {
+                'document_id': document_id,
+                'source_id': section_id,
+                'target_id': target_id,
+                'relation_type': 'HAS_ENTITY'
+            }
+            mysql_success = self.mysql_manager.insert_data('graph_relations', relation_data)
+            
+            # Neo4j数据
+            try:
+                # 查找源节点（Section）
+                source_nodes = self.neo4j_manager.find_nodes('Section', {'section_id': section_id, 'document_id': document_id})
+                # 查找目标节点（Entity）
+                entity_type = mention.get('entity_type', '')
+                target_label = entity_type if entity_type else 'Entity'
+                target_nodes = self.neo4j_manager.find_nodes(target_label, {'entity_uid': target_id, 'document_id': document_id})
+                
+                if source_nodes and target_nodes:
+                    source_node_id = source_nodes[0]['node_id']
+                    target_node_id = target_nodes[0]['node_id']
+                    
+                    relation_properties = {
+                        'document_id': document_id,
+                        'created_at': datetime.now().isoformat()
+                    }
+                    
+                    neo4j_success = self.neo4j_manager.create_relationship(
+                        source_node_id, target_node_id, 'HAS_ENTITY', relation_properties
+                    )
+                    self.logger.debug(f"Neo4j HAS_ENTITY关系创建: {neo4j_success}")
+                else:
+                    self.logger.warning(f"Neo4j HAS_ENTITY关系创建失败: 找不到源节点或目标节点")
+            except Exception as e:
+                self.logger.warning(f"Neo4j HAS_ENTITY关系创建失败: {e}")
+            
+            return mysql_success
+            
+        except Exception as e:
+            self.logger.error(f"创建HAS_ENTITY关系失败: {e}")
+            return False
+
+    def _create_semantic_relations(self, mentions, document_id):
+        """创建语义关系 - 双写到MySQL和Neo4j"""
+        try:
+            relations_count = 0
+            # 简化实现：在同一section内的Product和Analyte之间创建MEASURES关系
+            sections_mentions = {}
+            for mention in mentions:
+                section_id = mention.get('section_id', '')
+                if section_id not in sections_mentions:
+                    sections_mentions[section_id] = []
+                sections_mentions[section_id].append(mention)
+
+            for section_mentions in sections_mentions.values():
+                products = [m for m in section_mentions if m.get('entity_type') == 'Product']
+                analytes = [m for m in section_mentions if m.get('entity_type') == 'Analyte']
+
+                for product in products:
+                    for analyte in analytes:
+                        source_id = product.get('entity_uid', '')
+                        target_id = analyte.get('entity_uid', '')
+                        
+                        # MySQL数据
+                        relation_data = {
+                            'document_id': document_id,
+                            'source_id': source_id,
+                            'target_id': target_id,
+                            'relation_type': 'MEASURES'
+                        }
+                        mysql_success = self.mysql_manager.insert_data('graph_relations', relation_data)
+                        
+                        if mysql_success:
+                            relations_count += 1
+                            
+                            # Neo4j数据
+                            try:
+                                # 查找源节点（Product）
+                                source_nodes = self.neo4j_manager.find_nodes('Product', {'entity_uid': source_id, 'document_id': document_id})
+                                # 查找目标节点（Analyte）
+                                target_nodes = self.neo4j_manager.find_nodes('Analyte', {'entity_uid': target_id, 'document_id': document_id})
+                                
+                                if source_nodes and target_nodes:
+                                    source_node_id = source_nodes[0]['node_id']
+                                    target_node_id = target_nodes[0]['node_id']
+                                    
+                                    relation_properties = {
+                                        'document_id': document_id,
+                                        'created_at': datetime.now().isoformat()
+                                    }
+                                    
+                                    neo4j_success = self.neo4j_manager.create_relationship(
+                                        source_node_id, target_node_id, 'MEASURES', relation_properties
+                                    )
+                                    self.logger.debug(f"Neo4j MEASURES关系创建: {neo4j_success}")
+                                else:
+                                    self.logger.warning(f"Neo4j MEASURES关系创建失败: 找不到源节点或目标节点")
+                            except Exception as e:
+                                self.logger.warning(f"Neo4j MEASURES关系创建失败: {e}")
+
+            return relations_count
+            
+        except Exception as e:
+            self.logger.error(f"创建语义关系失败: {e}")
+            return 0

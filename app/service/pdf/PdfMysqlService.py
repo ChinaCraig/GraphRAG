@@ -190,9 +190,12 @@ class PdfMysqlService:
                         # bind_to_elem_id（若清单里有图文绑定，暂时留空）
                         bind_to_elem_id = ''
                         
+                        # 确保elem_id唯一性：组合section_id和原始elem_id
+                        unique_elem_id = f"{section_id}_{elem_id}" if elem_id else f"{section_id}_figure_{saved_count}"
+                        
                         # 构建figures表数据
                         figure_data = {
-                            'elem_id': elem_id,  # 主键，与Neo4j、向量库、ES一致
+                            'elem_id': unique_elem_id,  # 使用唯一的elem_id作为主键
                             'section_id': section_id,
                             'image_path': image_path,
                             'caption': caption,
@@ -217,12 +220,12 @@ class PdfMysqlService:
             self.logger.error(f"保存figures失败: {str(e)}")
             return 0
     
-    def _normalize_bbox(self, bbox: Dict[str, Any], page_w: int, page_h: int) -> Dict[str, float]:
+    def _normalize_bbox(self, bbox: Any, page_w: int, page_h: int) -> Dict[str, float]:
         """
         规范化bbox坐标（转换为相对坐标）
         
         Args:
-            bbox: 边界框坐标
+            bbox: 边界框坐标，可能是字典格式 {'x1':..., 'y1':...} 或列表格式 [[x1,y1],[x2,y2]]
             page_w: 页面宽度
             page_h: 页面高度
             
@@ -233,10 +236,26 @@ class PdfMysqlService:
             if not bbox or page_w <= 0 or page_h <= 0:
                 return {'x1': 0.0, 'y1': 0.0, 'x2': 0.0, 'y2': 0.0}
             
-            x1 = float(bbox.get('x1', 0)) / page_w
-            y1 = float(bbox.get('y1', 0)) / page_h
-            x2 = float(bbox.get('x2', 0)) / page_w
-            y2 = float(bbox.get('y2', 0)) / page_h
+            # 处理不同的bbox格式
+            if isinstance(bbox, dict):
+                # 字典格式：{'x1': ..., 'y1': ..., 'x2': ..., 'y2': ...}
+                x1 = float(bbox.get('x1', 0)) / page_w
+                y1 = float(bbox.get('y1', 0)) / page_h
+                x2 = float(bbox.get('x2', 0)) / page_w
+                y2 = float(bbox.get('y2', 0)) / page_h
+            elif isinstance(bbox, list) and len(bbox) >= 2:
+                # 列表格式：[[x1, y1], [x2, y2]]
+                if isinstance(bbox[0], list) and len(bbox[0]) >= 2 and isinstance(bbox[1], list) and len(bbox[1]) >= 2:
+                    x1 = float(bbox[0][0]) / page_w
+                    y1 = float(bbox[0][1]) / page_h
+                    x2 = float(bbox[1][0]) / page_w
+                    y2 = float(bbox[1][1]) / page_h
+                else:
+                    # 其他列表格式，返回默认值
+                    return {'x1': 0.0, 'y1': 0.0, 'x2': 0.0, 'y2': 0.0}
+            else:
+                # 其他格式，返回默认值
+                return {'x1': 0.0, 'y1': 0.0, 'x2': 0.0, 'y2': 0.0}
             
             return {
                 'x1': round(x1, 4),
@@ -283,9 +302,12 @@ class PdfMysqlService:
                         # n_cols = 推断/解析列数
                         n_cols = self._infer_table_columns(rows, table_html)
                         
+                        # 确保elem_id唯一性：组合section_id和原始elem_id
+                        unique_elem_id = f"{section_id}_{elem_id}" if elem_id else f"{section_id}_table_{saved_count}"
+                        
                         # 构建tables表数据
                         table_data = {
-                            'elem_id': elem_id,  # 主键，与Neo4j、向量库、ES一致
+                            'elem_id': unique_elem_id,  # 使用唯一的elem_id作为主键
                             'section_id': section_id,
                             'table_html': table_html,
                             'n_rows': n_rows,
@@ -366,14 +388,18 @@ class PdfMysqlService:
             saved_count = 0
             
             for section in sections:
+                section_id = section.get('section_id', '')
                 blocks = section.get('blocks', [])
                 
                 # 遍历blocks，寻找type='table'的block
                 for block in blocks:
                     block_type = block.get('type', '').lower()
                     if block_type == 'table':
-                        table_elem_id = block.get('elem_id', '')
+                        original_elem_id = block.get('elem_id', '')
                         rows = block.get('rows', [])
+                        
+                        # 生成与tables表一致的唯一elem_id
+                        table_elem_id = f"{section_id}_{original_elem_id}" if original_elem_id else f"{section_id}_table_unknown"
                         
                         # 对每一行创建记录
                         for row_index, row in enumerate(rows):
@@ -385,7 +411,7 @@ class PdfMysqlService:
                             
                             # 构建table_rows表数据
                             table_row_data = {
-                                'table_elem_id': table_elem_id,
+                                'table_elem_id': table_elem_id,  # 使用与tables表一致的唯一ID
                                 'row_index': row_index,
                                 'row_text': row_text,
                                 'row_json': row_json,

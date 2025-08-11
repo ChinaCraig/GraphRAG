@@ -271,7 +271,7 @@ class PdfBM25Service:
                     'tokens': tokens,
                     'length': len(tokens),
                     'metadata': {
-                        'type': doc['type'],
+                        'content_type': doc.get('content_type', ''),
                         'title': doc.get('title', ''),
                         'page_number': doc.get('page_number', 1),
                         'section_id': doc.get('section_id', ''),

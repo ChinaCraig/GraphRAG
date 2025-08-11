@@ -1,8 +1,16 @@
--- GraphRAG数据库初始化脚本 v2.1
+-- GraphRAG数据库初始化脚本 v2.2
 -- 创建GraphRAG系统所需的所有数据库表
--- 数据库连接信息：192.168.16.26:3306, root, !200808Xx
+-- 数据库连接信息：192.168.2.202:3306, root, zhang
 --
 -- 更新日志：
+-- v2.2: 新增GraphRAG专用图谱表和问题修复
+--   - 新增graph_nodes表：GraphRAG专用节点表，支持Section/Block/Entity/Claim等多种节点类型
+--   - 新增graph_relations表：GraphRAG专用关系表，支持MENTIONS/HAS_ENTITY/MEASURES等关系类型
+--   - 修复了中文实体识别的正则表达式边界问题（移除\b单词边界）
+--   - 修复了bbox规范化支持列表格式数据：[[x1,y1],[x2,y2]]
+--   - 修复了figures/tables表重复主键问题：elem_id加section_id前缀确保唯一性
+--   - 修复了table_rows表外键约束问题：确保与tables表主键一致
+--   - node_id字段设置为可空，解决数据插入失败问题
 -- v2.1: 新增PDF结构化数据MySQL存储功能
 --   - 新增sections表：存储PDF章节信息（一节一行）
 --   - 新增figures表：存储PDF图片信息（一图一行，遍历blocks.type='figure'）
@@ -196,6 +204,57 @@ CREATE TABLE `relations` (
   CONSTRAINT `fk_relations_tail_entity` FOREIGN KEY (`tail_entity_id`) REFERENCES `entities` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_relations_source_document` FOREIGN KEY (`source_document_id`) REFERENCES `documents` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='关系表';
+
+-- ===========================
+-- GraphRAG专用图谱表（MySQL简化实现）
+-- ===========================
+
+-- 图谱节点表（支持Section/Block/Entity/Claim等多种节点类型）
+DROP TABLE IF EXISTS `graph_nodes`;
+CREATE TABLE `graph_nodes` (
+  `id` int(11) NOT NULL AUTO_INCREMENT COMMENT '节点ID',
+  `document_id` int(11) NOT NULL COMMENT '文档ID',
+  `node_id` varchar(255) DEFAULT NULL COMMENT '节点唯一标识符（可选）',
+  `node_type` varchar(100) NOT NULL COMMENT '节点类型(Section/Block/Entity/Claim)',
+  `name` varchar(255) DEFAULT NULL COMMENT '节点名称',
+  `section_id` varchar(100) DEFAULT NULL COMMENT '所属section ID',
+  `elem_id` varchar(100) DEFAULT NULL COMMENT '元素ID',
+  `entity_uid` varchar(255) DEFAULT NULL COMMENT '实体唯一标识符',
+  `entity_type` varchar(100) DEFAULT NULL COMMENT '实体类型',
+  `claim_id` varchar(255) DEFAULT NULL COMMENT 'Claim ID',
+  `metric_type` varchar(100) DEFAULT NULL COMMENT '指标类型',
+  `title` text COMMENT '标题内容',
+  `properties` text COMMENT '节点属性(JSON格式)',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_document_id` (`document_id`),
+  KEY `idx_node_type` (`node_type`),
+  KEY `idx_section_id` (`section_id`),
+  KEY `idx_entity_type` (`entity_type`),
+  KEY `idx_entity_uid` (`entity_uid`),
+  KEY `idx_node_id` (`node_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='图谱节点表 - GraphRAG专用MySQL简化实现';
+
+-- 图谱关系表（支持MENTIONS/HAS_ENTITY/MEASURES等多种关系类型）
+DROP TABLE IF EXISTS `graph_relations`;
+CREATE TABLE `graph_relations` (
+  `id` int(11) NOT NULL AUTO_INCREMENT COMMENT '关系ID',
+  `document_id` int(11) NOT NULL COMMENT '文档ID',
+  `source_id` varchar(255) NOT NULL COMMENT '源节点ID',
+  `target_id` varchar(255) NOT NULL COMMENT '目标节点ID',
+  `relation_type` varchar(100) NOT NULL COMMENT '关系类型(MENTIONS/HAS_ENTITY/MEASURES)',
+  `confidence` float(4,3) DEFAULT NULL COMMENT '置信度',
+  `properties` text COMMENT '关系属性(JSON格式)',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_document_id` (`document_id`),
+  KEY `idx_source_id` (`source_id`),
+  KEY `idx_target_id` (`target_id`),
+  KEY `idx_relation_type` (`relation_type`),
+  KEY `idx_confidence` (`confidence`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='图谱关系表 - GraphRAG专用MySQL简化实现';
 
 -- ===========================
 -- 搜索和日志相关表
