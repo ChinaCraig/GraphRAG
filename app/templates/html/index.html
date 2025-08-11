@@ -16,16 +16,118 @@
                 <h1>GraphRAG</h1>
             </div>
             <nav class="nav-menu">
-                <button class="nav-item active" data-tab="document-management">文档管理</button>
-                <button class="nav-item" data-tab="intelligent-search">智能检索</button>
+                <button class="nav-item active" data-tab="intelligent-search">智能检索</button>
+                <button class="nav-item" data-tab="document-management">文档管理</button>
             </nav>
         </div>
     </header>
 
     <!-- 主内容区域 -->
     <main class="main-content">
+        <!-- 智能检索页签 -->
+        <div id="intelligent-search" class="tab-content active">
+            <div class="search-layout">
+                <!-- 左侧会话管理区域 -->
+                <div class="session-sidebar">
+                    <div class="session-header">
+                        <button id="newSessionBtn" class="btn btn-primary btn-full">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none">
+                                <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                            新建对话
+                        </button>
+                    </div>
+                    
+                    <div class="session-list-container">
+                        <div class="session-list-header">
+                            <h3>对话历史</h3>
+                            <button id="clearAllSessions" class="btn-text" title="清空所有对话">
+                                <svg class="icon" viewBox="0 0 24 24" fill="none">
+                                    <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                        </div>
+                        
+                        <div id="sessionList" class="session-list">
+                            <!-- 会话项将在这里动态生成 -->
+                        </div>
+                    </div>
+                    
+                    <div class="session-footer">
+                        <div class="session-stats">
+                            <span id="sessionCount">总对话: 0</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 右侧聊天区域 -->
+                <div class="chat-container">
+                    <!-- 聊天头部 -->
+                    <div class="chat-header">
+                        <div class="chat-title">
+                            <h3 id="currentSessionTitle">新对话</h3>
+                            <span id="currentSessionTime"></span>
+                        </div>
+                        <div class="chat-actions">
+                            <button id="renameSessionBtn" class="btn-icon" title="重命名对话">
+                                <svg class="icon" viewBox="0 0 24 24" fill="none">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                            <button id="clearCurrentSession" class="btn-icon" title="清空当前对话">
+                                <svg class="icon" viewBox="0 0 24 24" fill="none">
+                                    <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- 聊天消息区域 -->
+                    <div id="chatMessages" class="chat-messages">
+                        <div class="welcome-message">
+                            <h2>欢迎使用智能检索</h2>
+                            <p>您可以输入问题，系统会分析并返回相关的完整内容，包括文本、图表、图片、表格等。</p>
+                            <div class="welcome-features">
+                                <div class="feature-item">
+                                    <svg class="icon" viewBox="0 0 24 24" fill="none">
+                                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="currentColor"/>
+                                    </svg>
+                                    <span>智能语义理解</span>
+                                </div>
+                                <div class="feature-item">
+                                    <svg class="icon" viewBox="0 0 24 24" fill="none">
+                                        <path d="M9 12l2 2 4-4M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    <span>多模态内容检索</span>
+                                </div>
+                                <div class="feature-item">
+                                    <svg class="icon" viewBox="0 0 24 24" fill="none">
+                                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="currentColor"/>
+                                    </svg>
+                                    <span>实时知识图谱分析</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 输入区域 -->
+                    <div class="chat-input-container">
+                        <div class="chat-input-box">
+                            <textarea id="chatInput" placeholder="请输入您的问题..." rows="3"></textarea>
+                            <button id="sendBtn" class="btn btn-primary">
+                                <svg class="icon" viewBox="0 0 24 24" fill="none">
+                                    <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- 文档管理页签 -->
-        <div id="document-management" class="tab-content active">
+        <div id="document-management" class="tab-content">
             <!-- 工具栏 -->
             <div class="toolbar">
                 <div class="toolbar-left">
@@ -124,108 +226,6 @@
                             <div id="progressText" class="progress-text">0%</div>
                         </div>
                         <div id="progressStatus" class="progress-status">等待处理...</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 智能检索页签 -->
-        <div id="intelligent-search" class="tab-content">
-            <div class="search-layout">
-                <!-- 左侧会话管理区域 -->
-                <div class="session-sidebar">
-                    <div class="session-header">
-                        <button id="newSessionBtn" class="btn btn-primary btn-full">
-                            <svg class="icon" viewBox="0 0 24 24" fill="none">
-                                <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                            </svg>
-                            新建对话
-                        </button>
-                    </div>
-                    
-                    <div class="session-list-container">
-                        <div class="session-list-header">
-                            <h3>对话历史</h3>
-                            <button id="clearAllSessions" class="btn-text" title="清空所有对话">
-                                <svg class="icon" viewBox="0 0 24 24" fill="none">
-                                    <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                            </button>
-                        </div>
-                        
-                        <div id="sessionList" class="session-list">
-                            <!-- 会话项将在这里动态生成 -->
-                        </div>
-                    </div>
-                    
-                    <div class="session-footer">
-                        <div class="session-stats">
-                            <span id="sessionCount">总对话: 0</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- 右侧聊天区域 -->
-                <div class="chat-container">
-                    <!-- 聊天头部 -->
-                    <div class="chat-header">
-                        <div class="chat-title">
-                            <h3 id="currentSessionTitle">新对话</h3>
-                            <span id="currentSessionTime"></span>
-                        </div>
-                        <div class="chat-actions">
-                            <button id="renameSessionBtn" class="btn-icon" title="重命名对话">
-                                <svg class="icon" viewBox="0 0 24 24" fill="none">
-                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                            </button>
-                            <button id="clearCurrentSession" class="btn-icon" title="清空当前对话">
-                                <svg class="icon" viewBox="0 0 24 24" fill="none">
-                                    <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <!-- 聊天消息区域 -->
-                    <div id="chatMessages" class="chat-messages">
-                        <div class="welcome-message">
-                            <h2>欢迎使用智能检索</h2>
-                            <p>您可以输入问题，系统会分析并返回相关的完整内容，包括文本、图表、图片、表格等。</p>
-                            <div class="welcome-features">
-                                <div class="feature-item">
-                                    <svg class="icon" viewBox="0 0 24 24" fill="none">
-                                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="currentColor"/>
-                                    </svg>
-                                    <span>智能语义理解</span>
-                                </div>
-                                <div class="feature-item">
-                                    <svg class="icon" viewBox="0 0 24 24" fill="none">
-                                        <path d="M9 12l2 2 4-4M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                    </svg>
-                                    <span>多模态内容检索</span>
-                                </div>
-                                <div class="feature-item">
-                                    <svg class="icon" viewBox="0 0 24 24" fill="none">
-                                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="currentColor"/>
-                                    </svg>
-                                    <span>实时知识图谱分析</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 输入区域 -->
-                    <div class="chat-input-container">
-                        <div class="chat-input-box">
-                            <textarea id="chatInput" placeholder="请输入您的问题..." rows="3"></textarea>
-                            <button id="sendBtn" class="btn btn-primary">
-                                <svg class="icon" viewBox="0 0 24 24" fill="none">
-                                    <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
-                                </svg>
-                            </button>
-                        </div>
                     </div>
                 </div>
             </div>

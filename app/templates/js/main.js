@@ -5,7 +5,7 @@
 
 class GraphRAGApp {
     constructor() {
-        this.currentTab = 'document-management';
+        this.currentTab = 'intelligent-search';
         this.currentPage = 1;
         this.pageSize = 20;
         this.searchKeyword = '';
@@ -29,8 +29,18 @@ class GraphRAGApp {
      */
     init() {
         this.initEventListeners();
-        this.loadFileList();
+        
+        // 🔧 修复：根据当前页签恢复状态，避免内容丢失
+        if (this.currentTab === 'document-management') {
+            this.restoreDocumentManagementState();
+        } else {
+            this.loadFileList();
+        }
+        
         this.setupWebSocket();
+        
+        // 🔧 修复：初始化会话管理功能
+        this.initSessionManagement();
         
         // WebSocket连接是异步的，不要在这里立即检查连接状态
         // 定时任务的启动和停止将在WebSocket连接成功/失败的回调中处理
@@ -173,6 +183,9 @@ class GraphRAGApp {
      * 切换页签
      */
     switchTab(tabName) {
+        // 🔧 修复：保存当前页签状态，避免内容丢失
+        this.saveCurrentTabState();
+        
         // 更新导航状态
         document.querySelectorAll('.nav-item').forEach(item => {
             item.classList.remove('active');
@@ -185,11 +198,141 @@ class GraphRAGApp {
         });
         document.getElementById(tabName).classList.add('active');
 
+        const previousTab = this.currentTab;
         this.currentTab = tabName;
 
-        // 根据页签执行特定操作
+        // 🔧 修复：根据页签恢复状态，避免重复加载
         if (tabName === 'document-management') {
+            this.restoreDocumentManagementState();
+        } else if (tabName === 'intelligent-search') {
+            this.restoreIntelligentSearchState();
+        }
+        
+        console.log(`🔄 页签切换: ${previousTab} → ${tabName}`);
+    }
+
+    /**
+     * 保存当前页签状态
+     */
+    saveCurrentTabState() {
+        try {
+            if (this.currentTab === 'intelligent-search') {
+                // 保存智能检索页签状态
+                if (this.currentSessionId) {
+                    this.saveCurrentSessionMessages();
+                }
+                
+                // 保存会话管理状态到本地存储
+                this.saveSessionsToStorage();
+                
+            } else if (this.currentTab === 'document-management') {
+                // 保存文档管理页签状态
+                const documentState = {
+                    currentPage: this.currentPage,
+                    pageSize: this.pageSize,
+                    searchKeyword: this.searchKeyword,
+                    selectedFiles: Array.from(this.selectedFiles),
+                    lastLoadTime: Date.now()
+                };
+                
+                localStorage.setItem('documentManagementState', JSON.stringify(documentState));
+            }
+            
+            console.log(`💾 已保存 ${this.currentTab} 页签状态`);
+            
+        } catch (error) {
+            console.error('保存页签状态失败:', error);
+        }
+    }
+
+    /**
+     * 恢复文档管理页签状态
+     */
+    restoreDocumentManagementState() {
+        try {
+            // 尝试从本地存储恢复状态
+            const savedState = localStorage.getItem('documentManagementState');
+            
+            if (savedState) {
+                const state = JSON.parse(savedState);
+                
+                // 检查状态是否过期（超过10分钟）
+                const isExpired = Date.now() - state.lastLoadTime > 10 * 60 * 1000;
+                
+                if (!isExpired) {
+                    // 恢复状态
+                    this.currentPage = state.currentPage || 1;
+                    this.pageSize = state.pageSize || 20;
+                    this.searchKeyword = state.searchKeyword || '';
+                    this.selectedFiles = new Set(state.selectedFiles || []);
+                    
+                    // 恢复搜索框内容
+                    const searchInput = document.getElementById('searchInput');
+                    if (searchInput) {
+                        searchInput.value = this.searchKeyword;
+                    }
+                    
+                    // 恢复页面大小选择
+                    const pageSizeSelect = document.getElementById('pageSizeSelect');
+                    if (pageSizeSelect) {
+                        pageSizeSelect.value = this.pageSize;
+                    }
+                    
+                    console.log('📄 已恢复文档管理页签状态');
+                    
+                    // 只有状态有效时才避免重新加载，直接加载文件列表以应用恢复的状态
+                    this.loadFileList();
+                    return;
+                }
+            }
+            
+            // 状态无效或不存在，正常加载
             this.loadFileList();
+            
+        } catch (error) {
+            console.error('恢复文档管理状态失败:', error);
+            // 出错时正常加载
+            this.loadFileList();
+        }
+    }
+
+    /**
+     * 恢复智能检索页签状态
+     */
+    restoreIntelligentSearchState() {
+        try {
+            // 确保会话管理功能可用，但不强制创建新会话
+            this.ensureSessionManagementReady(false);
+            
+            console.log('🤖 已恢复智能检索页签状态');
+            
+        } catch (error) {
+            console.error('恢复智能检索状态失败:', error);
+            // 出错时使用原有逻辑
+            this.ensureSessionManagementReady();
+        }
+    }
+
+    /**
+     * 保存文档管理状态到本地存储
+     */
+    saveDocumentManagementState() {
+        if (this.currentTab === 'document-management') {
+            try {
+                const documentState = {
+                    currentPage: this.currentPage,
+                    pageSize: this.pageSize,
+                    searchKeyword: this.searchKeyword,
+                    selectedFiles: Array.from(this.selectedFiles),
+                    lastLoadTime: Date.now()
+                };
+                
+                localStorage.setItem('documentManagementState', JSON.stringify(documentState));
+                console.log('💾 文档管理状态已实时保存');
+                
+            } catch (error) {
+                console.error('保存文档管理状态失败:', error);
+            }
         }
     }
 
@@ -309,6 +452,8 @@ class GraphRAGApp {
             this.pageSize = parseInt(e.target.value);
             this.currentPage = 1; // 重置到第一页
             this.loadFileList();
+            // 🔧 修复：实时保存页面大小设置
+            this.saveDocumentManagementState();
         });
     }
 
@@ -318,6 +463,8 @@ class GraphRAGApp {
     goToPage(page) {
         this.currentPage = page;
         this.loadFileList();
+        // 🔧 修复：实时保存翻页状态
+        this.saveDocumentManagementState();
     }
 
     /**
@@ -359,6 +506,8 @@ class GraphRAGApp {
         this.searchKeyword = document.getElementById('searchInput').value.trim();
         this.currentPage = 1;
         this.loadFileList();
+        // 🔧 修复：实时保存搜索状态
+        this.saveDocumentManagementState();
     }
 
     /**
@@ -369,6 +518,8 @@ class GraphRAGApp {
             checkbox.checked = checked;
         });
         this.updateSelectedFiles();
+        // 🔧 修复：实时保存选择状态
+        this.saveDocumentManagementState();
     }
 
     /**
@@ -402,6 +553,9 @@ class GraphRAGApp {
         } else {
             selectAllCheckbox.indeterminate = true;
         }
+        
+        // 🔧 修复：实时保存文件选择状态
+        this.saveDocumentManagementState();
     }
 
     /**
@@ -807,33 +961,117 @@ class GraphRAGApp {
      * 初始化会话相关事件
      */
     initSessionEvents() {
-        // 新建会话按钮
-        document.getElementById('newSessionBtn').addEventListener('click', () => {
-            this.createNewSession();
-        });
+        try {
+            // 🔧 修复：添加错误处理和DOM元素检查
+            
+            // 新建会话按钮
+            const newSessionBtn = document.getElementById('newSessionBtn');
+            if (newSessionBtn) {
+                newSessionBtn.addEventListener('click', () => {
+                    this.createNewSession();
+                });
+                console.log('✅ 新建会话按钮事件已绑定');
+            } else {
+                console.error('❌ 未找到新建会话按钮元素 (newSessionBtn)');
+            }
 
-        // 清空所有会话按钮
-        document.getElementById('clearAllSessions').addEventListener('click', () => {
-            this.showConfirmDialog(
-                '确认清空所有对话',
-                '此操作将删除所有对话历史，且无法恢复。确定要继续吗？',
-                () => this.clearAllSessions()
-            );
-        });
+            // 清空所有会话按钮
+            const clearAllBtn = document.getElementById('clearAllSessions');
+            if (clearAllBtn) {
+                clearAllBtn.addEventListener('click', () => {
+                    this.showConfirmDialog(
+                        '清空所有对话',
+                        '此操作将永久删除所有对话历史，无法恢复。请谨慎操作！',
+                        () => this.clearAllSessions(),
+                        null,
+                        '清空全部',
+                        '取消',
+                        true
+                    );
+                });
+                console.log('✅ 清空所有会话按钮事件已绑定');
+            } else {
+                console.error('❌ 未找到清空所有会话按钮元素 (clearAllSessions)');
+            }
 
-        // 重命名当前会话按钮
-        document.getElementById('renameSessionBtn').addEventListener('click', () => {
-            this.renameCurrentSession();
-        });
+            // 重命名当前会话按钮
+            const renameBtn = document.getElementById('renameSessionBtn');
+            if (renameBtn) {
+                renameBtn.addEventListener('click', () => {
+                    this.renameCurrentSession();
+                });
+                console.log('✅ 重命名会话按钮事件已绑定');
+            } else {
+                console.error('❌ 未找到重命名会话按钮元素 (renameSessionBtn)');
+            }
 
-        // 清空当前会话按钮
-        document.getElementById('clearCurrentSession').addEventListener('click', () => {
-            this.showConfirmDialog(
-                '确认清空当前对话',
-                '此操作将清空当前对话的所有消息，且无法恢复。确定要继续吗？',
-                () => this.clearCurrentSession()
-            );
-        });
+            // 清空当前会话按钮
+            const clearCurrentBtn = document.getElementById('clearCurrentSession');
+            if (clearCurrentBtn) {
+                clearCurrentBtn.addEventListener('click', () => {
+                    this.showConfirmDialog(
+                        '清空当前对话',
+                        '此操作将永久删除当前对话的所有消息内容，无法恢复。确定要清空吗？',
+                        () => this.clearCurrentSession(),
+                        null,
+                        '清空对话',
+                        '取消',
+                        true
+                    );
+                });
+                console.log('✅ 清空当前会话按钮事件已绑定');
+            } else {
+                console.error('❌ 未找到清空当前会话按钮元素 (clearCurrentSession)');
+            }
+            
+        } catch (error) {
+            console.error('❌ 初始化会话事件时发生错误:', error);
+        }
+    }
+
+    /**
+     * 确保会话管理功能已准备就绪
+     * 在切换到智能检索页签时调用
+     * 
+     * @param {boolean} forceCreateNew - 是否强制创建新会话，默认true
+     */
+    ensureSessionManagementReady(forceCreateNew = true) {
+        try {
+            // 检查关键DOM元素是否存在
+            const newSessionBtn = document.getElementById('newSessionBtn');
+            const sessionList = document.getElementById('sessionList');
+            const chatMessages = document.getElementById('chatMessages');
+            
+            if (!newSessionBtn || !sessionList || !chatMessages) {
+                console.warn('会话管理DOM元素未找到，等待DOM加载完成');
+                return;
+            }
+            
+            // 🔧 修复：根据参数决定是否强制创建新会话
+            if (forceCreateNew && (!this.currentSessionId || this.sessions.size === 0)) {
+                console.log('🔧 检测到无活跃会话，创建默认会话');
+                this.createNewSession();
+            } else if (!forceCreateNew) {
+                // 不强制创建，只恢复现有状态
+                console.log('🔄 恢复现有会话状态，不创建新会话');
+            }
+            
+            // 更新UI显示
+            this.updateSessionList();
+            this.updateSessionStats();
+            
+            // 确保当前会话的UI状态正确
+            if (this.currentSessionId && this.sessions.has(this.currentSessionId)) {
+                const session = this.sessions.get(this.currentSessionId);
+                this.updateCurrentSessionUI(session);
+                this.loadSessionMessages(session);
+            }
+            
+            console.log(`✅ 会话管理功能已准备就绪 (forceCreateNew: ${forceCreateNew})`);
+            
+        } catch (error) {
+            console.error('确保会话管理就绪时发生错误:', error);
+        }
     }
 
     /**
@@ -892,13 +1130,30 @@ class GraphRAGApp {
      */
     deleteSession(sessionId) {
         if (!this.sessions.has(sessionId)) {
+            console.warn('尝试删除不存在的会话:', sessionId);
             return;
         }
         
+        // 🔧 修复：如果删除的是当前会话，先清除当前会话ID，避免在已删除会话上操作
+        const isCurrentSession = (this.currentSessionId === sessionId);
+        
+        if (isCurrentSession) {
+            // 保存当前消息到会话中（在删除之前）
+            const session = this.sessions.get(sessionId);
+            if (session) {
+                session.messages = [...this.chatMessages];
+                session.updatedAt = new Date();
+            }
+            
+            // 清除当前会话ID，避免后续操作尝试访问已删除的会话
+            this.currentSessionId = null;
+        }
+        
+        // 删除会话
         this.sessions.delete(sessionId);
         
-        // 如果删除的是当前会话，切换到其他会话
-        if (this.currentSessionId === sessionId) {
+        // 如果删除的是当前会话，切换到其他会话或创建新会话
+        if (isCurrentSession) {
             if (this.sessions.size > 0) {
                 const firstSessionId = this.sessions.keys().next().value;
                 this.switchToSession(firstSessionId);
@@ -919,21 +1174,37 @@ class GraphRAGApp {
      */
     renameCurrentSession() {
         if (!this.currentSessionId) {
+            console.warn('没有当前会话可重命名');
             return;
         }
         
         const session = this.sessions.get(this.currentSessionId);
-        const newTitle = prompt('请输入新的对话名称:', session.title);
-        
-        if (newTitle && newTitle.trim() !== '') {
-            session.title = newTitle.trim();
-            session.updatedAt = new Date();
-            this.updateCurrentSessionUI(session);
-            this.updateSessionList();
-            this.saveSessionsToStorage();
-            
-            console.log('✏️ 重命名会话:', this.currentSessionId, newTitle);
+        // 🔧 修复：检查会话是否存在
+        if (!session) {
+            console.warn('尝试重命名不存在的会话:', this.currentSessionId);
+            return;
         }
+        
+        this.showInputDialog(
+            '重命名对话',
+            '请输入新的对话名称:',
+            session.title,
+            (newTitle) => {
+                if (newTitle && newTitle.trim() !== '') {
+                    session.title = newTitle.trim();
+                    session.updatedAt = new Date();
+                    this.updateCurrentSessionUI(session);
+                    this.updateSessionList();
+                    this.saveSessionsToStorage();
+                    
+                    console.log('✏️ 重命名会话:', this.currentSessionId, newTitle);
+                }
+            },
+            null,
+            '保存',
+            '取消',
+            '输入对话名称'
+        );
     }
 
     /**
@@ -941,10 +1212,17 @@ class GraphRAGApp {
      */
     clearCurrentSession() {
         if (!this.currentSessionId) {
+            console.warn('没有当前会话可清空');
             return;
         }
         
         const session = this.sessions.get(this.currentSessionId);
+        // 🔧 修复：检查会话是否存在
+        if (!session) {
+            console.warn('尝试清空不存在的会话:', this.currentSessionId);
+            return;
+        }
+        
         session.messages = [];
         session.updatedAt = new Date();
         
@@ -996,16 +1274,75 @@ class GraphRAGApp {
         }
         
         const session = this.sessions.get(this.currentSessionId);
-        session.messages = [...this.chatMessages];
-        session.updatedAt = new Date();
+        // 🔧 修复：检查会话是否存在，防止在已删除的会话上操作
+        if (!session) {
+            console.warn('尝试保存消息到不存在的会话:', this.currentSessionId);
+            return;
+        }
+        
+        // 🔧 修复：只有当消息内容真正发生变化时才更新时间
+        const currentMessages = [...this.chatMessages];
+        const hasContentChanged = this.hasMessagesChanged(session.messages, currentMessages);
+        
+        session.messages = currentMessages;
+        
+        // 只有在内容真正变化时才更新updatedAt时间
+        if (hasContentChanged) {
+            session.updatedAt = new Date();
+            console.log('💬 会话内容已更新，更新时间戳:', this.currentSessionId);
+        } else {
+            console.log('👀 会话内容无变化，保持原更新时间:', this.currentSessionId);
+        }
+    }
+
+    /**
+     * 检查消息内容是否发生变化
+     */
+    hasMessagesChanged(oldMessages, newMessages) {
+        // 如果数量不同，肯定有变化
+        if (!oldMessages || oldMessages.length !== newMessages.length) {
+            return true;
+        }
+        
+        // 比较每条消息的内容和角色
+        for (let i = 0; i < oldMessages.length; i++) {
+            const oldMsg = oldMessages[i];
+            const newMsg = newMessages[i];
+            
+            // 检查关键属性是否有变化
+            if (oldMsg.role !== newMsg.role || 
+                oldMsg.content !== newMsg.content ||
+                oldMsg.timestamp !== newMsg.timestamp) {
+                return true;
+            }
+        }
+        
+        // 所有消息都相同
+        return false;
     }
 
     /**
      * 更新当前会话的UI显示
      */
     updateCurrentSessionUI(session) {
-        document.getElementById('currentSessionTitle').textContent = session.title;
-        document.getElementById('currentSessionTime').textContent = this.formatSessionTime(session.updatedAt);
+        // 🔧 修复：检查session是否存在
+        if (!session) {
+            console.warn('尝试更新不存在的会话UI');
+            // 设置默认显示
+            document.getElementById('currentSessionTitle').textContent = '新对话';
+            document.getElementById('currentSessionTime').textContent = '';
+            return;
+        }
+        
+        const titleElement = document.getElementById('currentSessionTitle');
+        const timeElement = document.getElementById('currentSessionTime');
+        
+        if (titleElement) {
+            titleElement.textContent = session.title;
+        }
+        if (timeElement) {
+            timeElement.textContent = this.formatSessionTime(session.updatedAt);
+        }
     }
 
     /**
@@ -1079,18 +1416,28 @@ class GraphRAGApp {
         const session = this.sessions.get(sessionId);
         if (!session) return;
         
-        const newTitle = prompt('请输入新的对话名称:', session.title);
-        if (newTitle && newTitle.trim() !== '') {
-            session.title = newTitle.trim();
-            session.updatedAt = new Date();
-            
-            if (sessionId === this.currentSessionId) {
-                this.updateCurrentSessionUI(session);
-            }
-            
-            this.updateSessionList();
-            this.saveSessionsToStorage();
-        }
+        this.showInputDialog(
+            '重命名对话',
+            '请输入新的对话名称:',
+            session.title,
+            (newTitle) => {
+                if (newTitle && newTitle.trim() !== '') {
+                    session.title = newTitle.trim();
+                    session.updatedAt = new Date();
+                    
+                    if (sessionId === this.currentSessionId) {
+                        this.updateCurrentSessionUI(session);
+                    }
+                    
+                    this.updateSessionList();
+                    this.saveSessionsToStorage();
+                }
+            },
+            null,
+            '保存',
+            '取消',
+            '输入对话名称'
+        );
     }
 
     /**
@@ -1101,9 +1448,13 @@ class GraphRAGApp {
         if (!session) return;
         
         this.showConfirmDialog(
-            '确认删除对话',
-            `确定要删除对话 "${session.title}" 吗？此操作无法恢复。`,
-            () => this.deleteSession(sessionId)
+            '删除对话',
+            `确定要删除对话 "${session.title}" 吗？\n\n此操作将永久删除该对话的所有消息记录，无法恢复。`,
+            () => this.deleteSession(sessionId),
+            null,
+            '删除对话',
+            '取消',
+            true
         );
     }
 
@@ -1272,10 +1623,199 @@ class GraphRAGApp {
     /**
      * 显示确认对话框
      */
-    showConfirmDialog(title, message, onConfirm) {
-        const isConfirmed = confirm(`${title}\n\n${message}`);
-        if (isConfirmed && onConfirm) {
-            onConfirm();
+    showConfirmDialog(title, message, onConfirm, onCancel = null, confirmText = '确认', cancelText = '取消', isDestructive = false) {
+        this.createConfirmModal(title, message, onConfirm, onCancel, confirmText, cancelText, isDestructive);
+    }
+
+    /**
+     * 创建确认模态框
+     */
+    createConfirmModal(title, message, onConfirm, onCancel, confirmText, cancelText, isDestructive) {
+        // 创建模态框HTML
+        const modalHTML = `
+            <div id="customConfirmModal" class="modal show">
+                <div class="modal-content confirm-modal">
+                    <div class="modal-header">
+                        <h3>${title}</h3>
+                        <button class="close-btn" onclick="app.hideConfirmModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="color: var(--text-secondary); line-height: 1.6; margin: 0;">${message.replace(/\n/g, '<br>')}</p>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="app.hideConfirmModal('cancel')">${cancelText}</button>
+                        <button class="btn ${isDestructive ? 'btn-danger' : 'btn-primary'}" onclick="app.hideConfirmModal('confirm')">${confirmText}</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // 添加到页面
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        
+        // 存储回调函数
+        this._confirmModalCallbacks = { onConfirm, onCancel };
+        
+        // 添加键盘事件监听
+        document.addEventListener('keydown', this.handleConfirmModalKeydown.bind(this));
+        
+        // 添加点击背景关闭功能
+        const modal = document.getElementById('customConfirmModal');
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                this.hideConfirmModal('cancel');
+            }
+        });
+    }
+
+    /**
+     * 隐藏确认模态框
+     */
+    hideConfirmModal(action = 'cancel') {
+        const modal = document.getElementById('customConfirmModal');
+        if (!modal) return;
+        
+        // 移除键盘事件监听
+        document.removeEventListener('keydown', this.handleConfirmModalKeydown.bind(this));
+        
+        // 执行回调
+        if (action === 'confirm' && this._confirmModalCallbacks?.onConfirm) {
+            this._confirmModalCallbacks.onConfirm();
+        } else if (action === 'cancel' && this._confirmModalCallbacks?.onCancel) {
+            this._confirmModalCallbacks.onCancel();
+        }
+        
+        // 移除模态框
+        modal.remove();
+        this._confirmModalCallbacks = null;
+    }
+
+    /**
+     * 处理确认模态框键盘事件
+     */
+    handleConfirmModalKeydown(e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            this.hideConfirmModal('cancel');
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            this.hideConfirmModal('confirm');
+        }
+    }
+
+    /**
+     * 显示输入对话框
+     */
+    showInputDialog(title, message, defaultValue = '', onConfirm, onCancel = null, confirmText = '确认', cancelText = '取消', placeholder = '') {
+        this.createInputModal(title, message, defaultValue, onConfirm, onCancel, confirmText, cancelText, placeholder);
+    }
+
+    /**
+     * 创建输入模态框
+     */
+    createInputModal(title, message, defaultValue, onConfirm, onCancel, confirmText, cancelText, placeholder) {
+        // 创建模态框HTML
+        const modalHTML = `
+            <div id="customInputModal" class="modal show">
+                <div class="modal-content confirm-modal">
+                    <div class="modal-header">
+                        <h3>${title}</h3>
+                        <button class="close-btn" onclick="app.hideInputModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="color: var(--text-secondary); line-height: 1.6; margin: 0 0 var(--spacing-lg) 0;">${message}</p>
+                        <input 
+                            type="text" 
+                            id="customInputValue" 
+                            value="${this.escapeHtml(defaultValue)}" 
+                            placeholder="${this.escapeHtml(placeholder)}"
+                            style="
+                                width: 100%;
+                                padding: var(--spacing-sm) var(--spacing-md);
+                                border: 1px solid var(--border-color);
+                                border-radius: var(--radius-md);
+                                background: var(--bg-secondary);
+                                color: var(--text-primary);
+                                font-size: var(--font-size-base);
+                                font-family: var(--font-family);
+                                outline: none;
+                                transition: border-color 0.2s ease;
+                            "
+                            onfocus="this.style.borderColor = 'var(--accent-primary)'"
+                            onblur="this.style.borderColor = 'var(--border-color)'"
+                        />
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="app.hideInputModal('cancel')">${cancelText}</button>
+                        <button class="btn btn-primary" onclick="app.hideInputModal('confirm')">${confirmText}</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // 添加到页面
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        
+        // 存储回调函数
+        this._inputModalCallbacks = { onConfirm, onCancel };
+        
+        // 聚焦并选中输入框
+        setTimeout(() => {
+            const input = document.getElementById('customInputValue');
+            if (input) {
+                input.focus();
+                input.select();
+            }
+        }, 100);
+        
+        // 添加键盘事件监听
+        document.addEventListener('keydown', this.handleInputModalKeydown.bind(this));
+        
+        // 添加点击背景关闭功能
+        const modal = document.getElementById('customInputModal');
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                this.hideInputModal('cancel');
+            }
+        });
+    }
+
+    /**
+     * 隐藏输入模态框
+     */
+    hideInputModal(action = 'cancel') {
+        const modal = document.getElementById('customInputModal');
+        if (!modal) return;
+        
+        // 移除键盘事件监听
+        document.removeEventListener('keydown', this.handleInputModalKeydown.bind(this));
+        
+        // 获取输入值
+        const input = document.getElementById('customInputValue');
+        const value = input ? input.value.trim() : '';
+        
+        // 执行回调
+        if (action === 'confirm' && this._inputModalCallbacks?.onConfirm) {
+            this._inputModalCallbacks.onConfirm(value);
+        } else if (action === 'cancel' && this._inputModalCallbacks?.onCancel) {
+            this._inputModalCallbacks.onCancel();
+        }
+        
+        // 移除模态框
+        modal.remove();
+        this._inputModalCallbacks = null;
+    }
+
+    /**
+     * 处理输入模态框键盘事件
+     */
+    handleInputModalKeydown(e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            this.hideInputModal('cancel');
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            this.hideInputModal('confirm');
         }
     }
 
