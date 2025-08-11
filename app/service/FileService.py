@@ -520,13 +520,19 @@ class FileService:
             'pending': {'progress': 10, 'stage': 'uploaded', 'stage_name': '文件已上传'},
             'extracting': {'progress': 25, 'stage': 'extracting', 'stage_name': '内容提取中'},
             'extracted': {'progress': 40, 'stage': 'extracted', 'stage_name': '内容提取完成'},
-            'vectorizing': {'progress': 55, 'stage': 'vectorizing', 'stage_name': '向量化处理中'},
-            'vectorized': {'progress': 70, 'stage': 'vectorized', 'stage_name': '向量化完成'},
-            'graph_processing': {'progress': 85, 'stage': 'graph_processing', 'stage_name': '知识图谱构建中'},
+            'vectorizing': {'progress': 50, 'stage': 'vectorizing', 'stage_name': '向量化处理中'},
+            'vectorized': {'progress': 60, 'stage': 'vectorized', 'stage_name': '向量化完成'},
+            'bm25_processing': {'progress': 65, 'stage': 'bm25_processing', 'stage_name': 'BM25倒排处理中'},
+            'bm25_completed': {'progress': 70, 'stage': 'bm25_completed', 'stage_name': 'BM25倒排完成'},
+            'graph_processing': {'progress': 80, 'stage': 'graph_processing', 'stage_name': '知识图谱构建中'},
+            'graph_completed': {'progress': 85, 'stage': 'graph_completed', 'stage_name': '知识图谱构建完成'},
+            'mysql_processing': {'progress': 95, 'stage': 'mysql_processing', 'stage_name': 'MySQL保存中'},
             'completed': {'progress': 100, 'stage': 'completed', 'stage_name': '处理完成'},
             'extract_failed': {'progress': 40, 'stage': 'extract_failed', 'stage_name': '内容提取失败'},
-            'vectorize_failed': {'progress': 70, 'stage': 'vectorize_failed', 'stage_name': '向量化失败'},
+            'vectorize_failed': {'progress': 60, 'stage': 'vectorize_failed', 'stage_name': '向量化失败'},
+            'bm25_failed': {'progress': 70, 'stage': 'bm25_failed', 'stage_name': 'BM25倒排失败'},
             'graph_failed': {'progress': 85, 'stage': 'graph_failed', 'stage_name': '知识图谱构建失败'},
+            'mysql_failed': {'progress': 95, 'stage': 'mysql_failed', 'stage_name': 'MySQL保存失败'},
             'process_failed': {'progress': 0, 'stage': 'process_failed', 'stage_name': '处理失败'}
         }
         
@@ -652,37 +658,55 @@ class FileService:
         try:
             # 导入处理服务
             from app.service.pdf.PdfExtractService import PdfExtractService
+            from app.service.pdf.PdfFormatElementsToJson import PdfFormatElementsToJson
             from app.service.pdf.PdfVectorService import PdfVectorService
+            from app.service.pdf.PdfBM25Service import PdfBM25Service
             from app.service.pdf.PdfGraphService import PdfGraphService
+            from app.service.pdf.PdfMysqlService import PdfMysqlService
             
             pdf_extract_service = PdfExtractService()
+            pdf_format_service = PdfFormatElementsToJson()
             pdf_vector_service = PdfVectorService()
+            pdf_bm25_service = PdfBM25Service()
             pdf_graph_service = PdfGraphService()
+            pdf_mysql_service = PdfMysqlService()
             
             self.logger.info(f"开始异步处理文件，ID: {file_id}")
             
-            # 步骤1：内容提取 (10% -> 40%)
+            # 步骤1：内容提取 (10% -> 25%)
             self.update_file_status(file_id, 'extracting')
-            extract_result = pdf_extract_service.extract_pdf_content(file_path, file_id)
+            elements = pdf_extract_service.extract_pdf_content(file_path, file_id)
             
-            if not extract_result['success']:
+            if elements is None:
                 self.update_file_status(file_id, 'extract_failed')
-                self.logger.error(f"文件内容提取失败，ID: {file_id}, 错误: {extract_result['message']}")
+                self.logger.error(f"文件内容提取失败，ID: {file_id}")
+                return
+
+            # 步骤1.1：格式化elements (25% -> 35%)
+            format_result = pdf_format_service.format_elements_to_json(elements, file_id, file_path)
+            
+            if not format_result['success']:
+                self.update_file_status(file_id, 'extract_failed')
+                self.logger.error(f"元素格式化失败，ID: {file_id}, 错误: {format_result['message']}")
                 return
             
-            # 获取生成的JSON文件路径
-            json_file_path = self._get_json_file_path(file_path, file_id)
-            if not json_file_path or not os.path.exists(json_file_path):
+            json_data = format_result['json_data']
+            self.logger.info(f"元素格式化完成，ID: {file_id}")
+            
+            # 步骤1.2：保存JSON文件 (35% -> 40%)
+            json_file_path = self._save_json_data(json_data, file_path, file_id)
+            
+            if not json_file_path:
                 self.update_file_status(file_id, 'extract_failed')
-                self.logger.error(f"未找到提取的JSON文件，ID: {file_id}")
+                self.logger.error(f"保存JSON文件失败，ID: {file_id}")
                 return
                 
             self.update_file_status(file_id, 'extracted')
-            self.logger.info(f"文件内容提取完成，ID: {file_id}")
+            self.logger.info(f"JSON文件保存完成，ID: {file_id}, 路径: {json_file_path}")
             
-            # 步骤2：向量化 (40% -> 70%)
+            # 步骤2：向量化 (40% -> 60%)
             self.update_file_status(file_id, 'vectorizing')
-            vector_result = pdf_vector_service.process_pdf_json_to_vectors(json_file_path, file_id)
+            vector_result = pdf_vector_service.process_pdf_json_to_vectors(json_data, file_id)
             
             if not vector_result['success']:
                 self.update_file_status(file_id, 'vectorize_failed')
@@ -692,21 +716,37 @@ class FileService:
             self.update_file_status(file_id, 'vectorized')
             self.logger.info(f"文件向量化完成，ID: {file_id}")
             
-            # 🔧 修复：获取向量化过程中生成的content_units.json文件
-            content_units_file_path = self._get_content_units_file_path(file_path, file_id)
-            if not content_units_file_path or not os.path.exists(content_units_file_path):
-                self.logger.warning(f"未找到content_units文件，使用原始JSON文件进行图谱构建，ID: {file_id}")
-                content_units_file_path = json_file_path  # 回退到原始文件
-            else:
-                self.logger.info(f"找到content_units文件: {content_units_file_path}")
+            # 步骤2.1：倒排 (60% -> 70%)
+            self.update_file_status(file_id, 'bm25_processing')
+            bm25_result = pdf_bm25_service.process_pdf_json_to_bm25(json_data, file_id)
             
-            # 步骤3：知识图谱构建 (70% -> 100%)
+            if not bm25_result['success']:
+                self.update_file_status(file_id, 'bm25_failed')
+                self.logger.error(f"BM25倒排处理失败，ID: {file_id}, 错误: {bm25_result['message']}")
+                return
+                
+            self.update_file_status(file_id, 'bm25_completed')
+            self.logger.info(f"BM25倒排处理完成，ID: {file_id}")
+            
+                        # 步骤3：知识图谱构建 (70% -> 85%)
             self.update_file_status(file_id, 'graph_processing')
-            graph_result = pdf_graph_service.process_pdf_json_to_graph(content_units_file_path, file_id)
+            graph_result = pdf_graph_service.process_pdf_json_to_graph(json_data, file_id)
             
             if not graph_result['success']:
                 self.update_file_status(file_id, 'graph_failed')
                 self.logger.error(f"知识图谱构建失败，ID: {file_id}, 错误: {graph_result['message']}")
+                return
+                
+            self.update_file_status(file_id, 'graph_completed')
+            self.logger.info(f"知识图谱构建完成，ID: {file_id}")
+            
+            # 步骤4：MySQL保存 (85% -> 100%)
+            self.update_file_status(file_id, 'mysql_processing')
+            mysql_result = pdf_mysql_service.process_pdf_json_to_mysql(json_data, file_id)
+            
+            if not mysql_result['success']:
+                self.update_file_status(file_id, 'mysql_failed')
+                self.logger.error(f"MySQL保存失败，ID: {file_id}, 错误: {mysql_result['message']}")
                 return
                 
             # 所有步骤完成
@@ -756,43 +796,42 @@ class FileService:
         except Exception as e:
             self.logger.error(f"获取JSON文件路径失败: {str(e)}")
             return None
+
     
-    def _get_content_units_file_path(self, pdf_file_path: str, file_id: int) -> Optional[str]:
+    def _save_json_data(self, json_data: Dict[str, Any], file_path: str, document_id: int) -> Optional[str]:
         """
-        获取向量化过程中生成的content_units.json文件路径
+        保存JSON数据到文件
         
         Args:
-            pdf_file_path: PDF文件路径
-            file_id: 文件ID
+            json_data: JSON数据
+            file_path: 原始PDF文件路径
+            document_id: 文档ID
             
         Returns:
-            Optional[str]: content_units.json文件路径
+            Optional[str]: 保存的JSON文件路径，失败返回None
         """
         try:
-            # 根据PDF文件路径推测content_units.json文件路径
-            filename = os.path.basename(pdf_file_path)
-            name_without_ext = os.path.splitext(filename)[0]
-            
-            # content_units.json文件命名格式
-            possible_names = [
-                f"{name_without_ext}_content_units.json",  # 主要格式
-                f"{name_without_ext.split('_', 2)[-1]}_content_units.json" if '_' in name_without_ext else None  # 去除时间戳前缀
-            ]
-            
-            # 过滤掉None值
-            possible_names = [name for name in possible_names if name]
-            
+            # 获取JSON输出目录
             json_dir = os.path.join(self.file_config['upload_folder'], 'json')
             
-            for json_name in possible_names:
-                json_path = os.path.join(json_dir, json_name)
-                if os.path.exists(json_path):
-                    self.logger.info(f"找到content_units文件: {json_path}")
-                    return json_path
+            # 确保目录存在
+            if not os.path.exists(json_dir):
+                os.makedirs(json_dir, exist_ok=True)
+                self.logger.info(f"创建JSON输出目录: {json_dir}")
             
-            self.logger.debug(f"在目录 {json_dir} 中找不到content_units文件: {possible_names}")
-            return None
+            # 生成输出文件名
+            pdf_filename = os.path.basename(file_path)
+            pdf_name_without_ext = os.path.splitext(pdf_filename)[0]
+            json_filename = f"{pdf_name_without_ext}_doc_{document_id}.json"
+            json_file_path = os.path.join(json_dir, json_filename)
+            
+            # 保存JSON文件
+            with open(json_file_path, 'w', encoding='utf-8') as f:
+                json.dump(json_data, f, ensure_ascii=False, indent=2, default=str)
+            
+            self.logger.info(f"JSON数据已保存到: {json_file_path}")
+            return json_file_path
             
         except Exception as e:
-            self.logger.error(f"获取content_units文件路径失败: {str(e)}")
+            self.logger.error(f"保存JSON数据到文件失败: {str(e)}")
             return None
