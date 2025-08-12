@@ -356,6 +356,42 @@ class Neo4jManager:
             self.logger.error(f"删除关系失败: {str(e)}")
             return False
     
+    def delete_document_data(self, document_id: int) -> bool:
+        """
+        删除指定文档的所有图数据（节点和关系）
+        
+        Args:
+            document_id: 文档ID
+            
+        Returns:
+            bool: 删除成功返回True
+        """
+        try:
+            # 查询要删除的节点数量
+            count_query = """
+            MATCH (n)
+            WHERE n.document_id = $document_id OR n.doc_id = $document_id
+            RETURN count(n) as node_count
+            """
+            count_result = self.execute_query(count_query, {"document_id": document_id})
+            node_count = count_result[0]['node_count'] if count_result else 0
+            
+            # 删除所有相关节点和关系（DETACH DELETE会同时删除关系）
+            delete_query = """
+            MATCH (n)
+            WHERE n.document_id = $document_id OR n.doc_id = $document_id
+            DETACH DELETE n
+            """
+            
+            self.execute_query(delete_query, {"document_id": document_id})
+            
+            self.logger.info(f"文档ID {document_id} 的所有图数据删除成功，共删除 {node_count} 个节点")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"删除文档ID {document_id} 的图数据失败: {str(e)}")
+            return False
+    
     def get_node_neighbors(self, node_id: str, relationship_types: Optional[List[str]] = None) -> List[Dict]:
         """
         获取节点的邻居节点
