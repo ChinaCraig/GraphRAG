@@ -2119,30 +2119,8 @@ class GraphRAGApp {
         this.showTypingIndicator();
 
         try {
-            // 调用智能检索API
-            const response = await fetch('/api/search/qa', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    question: message,
-                    context_limit: 5
-                })
-            });
-
-            const data = await response.json();
-            
-            this.hideTypingIndicator();
-
-            if (data.success) {
-                // 🎯 流式显示响应，支持多模态内容
-                const answer = data.data.answer || '抱歉，我无法理解您的问题。';
-                const multimodalContent = data.data.multimodal_content || null;
-                await this.streamMessage(answer, multimodalContent);
-            } else {
-                this.addMessage('assistant', '抱歉，查询失败：' + data.message);
-            }
+            // 使用SSE流式接收答案
+            this.startStreamingSearch(message);
         } catch (error) {
             console.error('智能检索失败:', error);
             this.hideTypingIndicator();
@@ -2151,9 +2129,259 @@ class GraphRAGApp {
     }
 
     /**
+     * 开始流式搜索
+     * 严格按照SSE方式接收后端增量数据
+     */
+    startStreamingSearch(message) {
+        // 复用"正在思考"容器，但保留思考效果直到开始接收答案
+        const typingIndicator = document.getElementById('typing-indicator');
+        let answerContainer;
+        
+        if (typingIndicator) {
+            answerContainer = typingIndicator.querySelector('.message-content');
+            // 移除typing-indicator ID，避免后续hideTypingIndicator影响
+            typingIndicator.removeAttribute('id');
+        } else {
+            // fallback：如果没找到typing indicator，创建新容器
+            answerContainer = this.addMessage('assistant', '');
+        }
+        
+        let answerText = '';
+        
+        // 清空思考状态并开始显示答案的函数
+        const startAnswering = () => {
+            if (!searchState.hasStartedAnswering) {
+                searchState.hasStartedAnswering = true;
+                answerContainer.innerHTML = ''; // 清空"正在思考"，开始显示答案
+            }
+        };
+        
+        // 构建SSE URL
+        const params = new URLSearchParams({
+            query: message,
+            user_id: 'anonymous',
+            session_id: this.currentSessionId || 'default',
+            stream: 'true'
+        });
+        
+        const url = `/api/search/intelligent?${params}`;
+        
+        // 创建EventSource连接
+        const eventSource = new EventSource(url);
+        
+        // 创建状态对象（通过引用传递）
+        const searchState = { hasStartedAnswering: false };
+        
+        // 监听不同类型的事件
+        eventSource.addEventListener('stage_update', (event) => {
+            const data = JSON.parse(event.data);
+            this.handleStageUpdate(data, answerContainer, searchState);
+        });
+        
+        eventSource.addEventListener('text_delta', (event) => {
+            const data = JSON.parse(event.data);
+            startAnswering(); // 第一次接收文本时清空思考状态
+            answerText += data.content;
+            answerContainer.innerHTML = this.formatMessageContent(answerText);
+            this.scrollToBottom();
+        });
+        
+        eventSource.addEventListener('render_image', (event) => {
+            const data = JSON.parse(event.data);
+            this.handleRenderImage(answerContainer, data);
+        });
+        
+        eventSource.addEventListener('render_table', (event) => {
+            const data = JSON.parse(event.data);
+            this.handleRenderTable(answerContainer, data);
+        });
+        
+        eventSource.addEventListener('render_chart', (event) => {
+            const data = JSON.parse(event.data);
+            this.handleRenderChart(answerContainer, data);
+        });
+        
+        eventSource.addEventListener('final_answer', (event) => {
+            const data = JSON.parse(event.data);
+            this.handleFinalAnswer(answerContainer, data);
+        });
+        
+        eventSource.addEventListener('completed', (event) => {
+            const data = JSON.parse(event.data);
+            console.log('✅ 搜索完成:', data.message);
+            // 不需要hideTypingIndicator，因为已经复用了容器
+            eventSource.close();
+        });
+        
+        eventSource.addEventListener('error', (event) => {
+            const data = JSON.parse(event.data);
+            console.error('❌ 搜索错误:', data.message);
+            answerContainer.innerHTML = `<div class="error-message">${data.message}</div>`;
+            eventSource.close();
+        });
+        
+        // 处理连接错误
+        eventSource.onerror = (error) => {
+            console.error('SSE连接错误:', error);
+            answerContainer.innerHTML = '<div class="error-message">连接中断，请重试</div>';
+            eventSource.close();
+        };
+    }
+
+    /**
+     * 处理阶段更新
+     */
+    handleStageUpdate(data, answerContainer, searchState) {
+        console.log(`${data.stage}: ${data.message} (${data.progress}%)`);
+        
+        // 如果还没开始回答，更新思考状态显示
+        if (!searchState.hasStartedAnswering && answerContainer) {
+            const thinkingContent = `
+                <div class="typing-indicator">
+                    <span>${data.message}</span>
+                    <div class="typing-dots">
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                    </div>
+                </div>
+            `;
+            answerContainer.innerHTML = thinkingContent;
+            this.scrollToBottom();
+        }
+    }
+
+    /**
+     * 处理图片渲染事件
+     */
+    handleRenderImage(container, data) {
+        const imageElement = document.createElement('div');
+        imageElement.className = 'multimodal-item image-item streaming-item';
+        imageElement.innerHTML = `
+            <div class="multimodal-header">
+                <span class="multimodal-type">🖼️ 图片</span>
+                <span class="multimodal-id">${data.element_id}</span>
+            </div>
+            <div class="image-container">
+                <img src="${data.url}" alt="${data.description}" class="multimodal-image" 
+                     onerror="this.style.display='none'" 
+                     onload="this.parentNode.querySelector('.image-placeholder')?.remove()">
+                <div class="image-placeholder">📷 图片加载中...</div>
+            </div>
+            ${data.description ? `<div class="multimodal-description">${data.description}</div>` : ''}
+        `;
+        
+        this.appendMultimodalContent(container, imageElement);
+    }
+
+    /**
+     * 处理表格渲染事件
+     */
+    handleRenderTable(container, data) {
+        const tableElement = document.createElement('div');
+        tableElement.className = 'multimodal-item table-item streaming-item';
+        tableElement.innerHTML = `
+            <div class="multimodal-header">
+                <span class="multimodal-type">📊 表格</span>
+                <span class="multimodal-id">${data.element_id}</span>
+            </div>
+            <div class="table-title">${data.title}</div>
+            <div class="table-summary">${data.summary}</div>
+            <div class="table-info">
+                <span class="table-size">${data.rows} 行 × ${data.columns} 列</span>
+                <a href="${data.url}" target="_blank" class="view-original">查看原表格</a>
+            </div>
+        `;
+        
+        this.appendMultimodalContent(container, tableElement);
+    }
+
+    /**
+     * 处理图表渲染事件
+     */
+    handleRenderChart(container, data) {
+        const chartElement = document.createElement('div');
+        chartElement.className = 'multimodal-item chart-item streaming-item';
+        chartElement.innerHTML = `
+            <div class="multimodal-header">
+                <span class="multimodal-type">📈 图表</span>
+                <span class="multimodal-id">${data.element_id}</span>
+            </div>
+            <div class="chart-description">${data.description}</div>
+            <div class="chart-actions">
+                <a href="${data.url}" target="_blank" class="view-original">查看原图表</a>
+            </div>
+        `;
+        
+        this.appendMultimodalContent(container, chartElement);
+    }
+
+    /**
+     * 处理最终答案
+     */
+    handleFinalAnswer(container, data) {
+        // 添加引用链接等最终内容
+        if (data.context && data.context.original_links) {
+            const linksElement = document.createElement('div');
+            linksElement.className = 'answer-references';
+            linksElement.innerHTML = `
+                <div class="references-header">📄 参考来源</div>
+                <div class="references-links">
+                    ${data.context.original_links.map(link => 
+                        `<a href="${link.url}" target="_blank" class="reference-link">
+                            ${link.text} (第${link.page_no}页)
+                        </a>`
+                    ).join('')}
+                </div>
+            `;
+            container.appendChild(linksElement);
+        }
+    }
+
+    /**
+     * 添加多模态内容到容器
+     */
+    appendMultimodalContent(container, element) {
+        // 确保有多模态容器
+        let multimodalContainer = container.querySelector('.multimodal-content');
+        if (!multimodalContainer) {
+            multimodalContainer = document.createElement('div');
+            multimodalContainer.className = 'multimodal-content';
+            container.appendChild(multimodalContainer);
+        }
+        
+        // 添加元素并触发动画
+        multimodalContainer.appendChild(element);
+        setTimeout(() => {
+            element.classList.add('fade-in');
+        }, 50);
+        
+        this.scrollToBottom();
+    }
+
+    /**
+     * 滚动到底部
+     */
+    scrollToBottom() {
+        const chatMessages = document.getElementById('chatMessages');
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    /**
      * 添加聊天消息 - 支持多模态内容
      */
     addMessage(role, content, multimodalContent = null) {
+        // 确保content是字符串类型
+        if (typeof content !== 'string') {
+            if (content === null || content === undefined) {
+                content = '';
+            } else if (typeof content === 'object') {
+                content = JSON.stringify(content, null, 2);
+            } else {
+                content = String(content);
+            }
+        }
+        
         // 创建消息对象
         const messageObj = {
             id: Date.now() + Math.random(),
@@ -2198,6 +2426,17 @@ class GraphRAGApp {
      * 流式显示消息 - 支持多模态内容渐进渲染
      */
     async streamMessage(content, multimodalContent = null) {
+        // 确保content是字符串类型
+        if (typeof content !== 'string') {
+            if (content === null || content === undefined) {
+                content = '';
+            } else if (typeof content === 'object') {
+                content = JSON.stringify(content, null, 2);
+            } else {
+                content = String(content);
+            }
+        }
+        
         // 🎯 创建消息容器，但不立即添加多模态内容
         const contentDiv = this.addMessage('assistant', '');
         
@@ -2224,6 +2463,17 @@ class GraphRAGApp {
      * 渐进式渲染多模态内容
      */
     async progressiveRenderMultimodal(contentDiv, textContent, multimodalContent) {
+        // 确保textContent是字符串类型
+        if (typeof textContent !== 'string') {
+            if (textContent === null || textContent === undefined) {
+                textContent = '';
+            } else if (typeof textContent === 'object') {
+                textContent = JSON.stringify(textContent, null, 2);
+            } else {
+                textContent = String(textContent);
+            }
+        }
+        
         // 先更新文本内容的格式
         contentDiv.innerHTML = this.formatMessageContent(textContent);
         
@@ -2386,6 +2636,17 @@ class GraphRAGApp {
      * 格式化消息内容 - 支持多模态内容渲染
      */
     formatMessageContent(content, multimodalContent = null) {
+        // 确保content是字符串类型
+        if (typeof content !== 'string') {
+            if (content === null || content === undefined) {
+                content = '';
+            } else if (typeof content === 'object') {
+                content = JSON.stringify(content, null, 2);
+            } else {
+                content = String(content);
+            }
+        }
+        
         // 基本的换行处理
         let formattedContent = content.replace(/\n/g, '<br>');
         
@@ -2511,6 +2772,71 @@ class GraphRAGApp {
         }).join('');
         
         return chartElements;
+        }
+
+    /**
+     * 从后端上下文中提取多模态内容
+     */
+    extractMultimodalContent(context) {
+        if (!context || !context.evidence_list) {
+            return null;
+        }
+
+        const images = [];
+        const tables = [];
+        const charts = [];
+
+        // 遍历证据列表，提取多模态内容
+        context.evidence_list.forEach((evidence, index) => {
+            const elementId = evidence.id || `evidence_${index}`;
+            
+            // 提取图片内容
+            if (evidence.has_image && evidence.image_info) {
+                images.push({
+                    element_id: elementId,
+                    path: evidence.image_info.caption ? null : `/api/file/view/${evidence.doc_id}?page=${evidence.page_no}`,
+                    description: evidence.image_info.caption || evidence.content.substring(0, 100) + '...',
+                    doc_id: evidence.doc_id,
+                    page_no: evidence.page_no,
+                    bbox: evidence.bbox
+                });
+            }
+            
+            // 提取表格内容
+            if (evidence.has_table && evidence.table_structure) {
+                tables.push({
+                    element_id: elementId,
+                    title: evidence.title || `表格 ${elementId}`,
+                    summary: evidence.table_structure.preview || evidence.content.substring(0, 150) + '...',
+                    data: null, // 简化处理，不解析具体表格数据
+                    doc_id: evidence.doc_id,
+                    page_no: evidence.page_no,
+                    bbox: evidence.bbox
+                });
+            }
+            
+            // 如果内容中包含图表关键词，视为图表内容
+            if (evidence.content.includes('图表') || evidence.content.includes('图形') || evidence.content.includes('Chart')) {
+                charts.push({
+                    element_id: elementId,
+                    description: evidence.content.substring(0, 100) + '...',
+                    doc_id: evidence.doc_id,
+                    page_no: evidence.page_no,
+                    bbox: evidence.bbox
+                });
+            }
+        });
+
+        // 如果没有任何多模态内容，返回null
+        if (images.length === 0 && tables.length === 0 && charts.length === 0) {
+            return null;
+        }
+
+        return {
+            images: images,
+            tables: tables,
+            charts: charts
+        };
     }
     
     /**
