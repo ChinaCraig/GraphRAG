@@ -54,1779 +54,849 @@ class PdfGraphService:
             self.logger.error(f"加载PDF知识图谱服务配置失败: {str(e)}")
             raise
     
-    def process_pdf_json_to_graph(self, json_file_path: str, document_id: int) -> Dict[str, Any]:
+    def process_pdf_json_to_graph(self, json_data: Dict[str, Any], document_id: int) -> Dict[str, Any]:
         """
-        将PDF提取的JSON文件处理为知识图谱
+        将PDF提取的JSON数据处理为知识图谱
         
         Args:
-            json_file_path: JSON文件路径（支持doc_1.json和content_units.json）
+            json_data: JSON数据（包含sections）
             document_id: 文档ID
             
         Returns:
             Dict[str, Any]: 处理结果
         """
         try:
-            # 加载JSON数据
-            with open(json_file_path, 'r', encoding='utf-8') as file:
-                json_data = json.load(file)
+            self.logger.info(f"开始知识图谱构建，文档ID: {document_id}")
             
-            # 判断JSON文件类型并选择相应的解析方法
-            if self._is_content_units_format(json_data):
-                # 使用content_units.json构建图谱（推荐方式）
-                graph_structure = self._parse_content_units_to_graph_structure(json_data, document_id)
-                self.logger.info(f"使用content_units.json格式构建图谱，文档ID: {document_id}")
-            else:
-                # 使用原始doc_1.json构建图谱（兼容性）
-                graph_structure = self._parse_pdf_json_to_graph_structure(json_data, document_id)
-                self.logger.info(f"使用doc_1.json格式构建图谱，文档ID: {document_id}")
-            
-            if not graph_structure:
+            # 1. 解析sections和blocks
+            sections = json_data.get('sections', [])
+            if not sections:
                 return {
                     'success': False,
-                    'message': '未找到可构建图谱的内容',
-                    'nodes_count': 0,
-                    'relationships_count': 0
+                    'message': '未找到可处理的sections',
+                    'entities_count': 0,
+                    'relations_count': 0
                 }
             
-            # 创建图谱节点和关系
-            nodes_created = self._create_graph_nodes(graph_structure, document_id)
-            relationships_created = self._create_graph_relationships(graph_structure, document_id)
+            # 2. 对每个block进行实体识别和指标提取
+            all_mentions = []
+            for section in sections:
+                section_mentions = self._process_section_blocks(section, document_id)
+                all_mentions.extend(section_mentions)
             
-            # 更新文档处理状态
-            self.mysql_manager.update_data(
-                'documents',
-                {'process_status': 'graph_processed'},
-                'id = :doc_id',
-                {'doc_id': document_id}
-            )
+            if not all_mentions:
+                return {
+                    'success': False,
+                    'message': '未识别到任何实体或指标',
+                    'entities_count': 0,
+                    'relations_count': 0
+                }
             
-            self.logger.info(f"PDF知识图谱构建完成，文档ID: {document_id}, 节点: {nodes_created}, 关系: {relationships_created}")
+            # 3. 规范化实体（别名/缩写表）
+            normalized_mentions = self._normalize_mentions(all_mentions)
+            
+            # 4. 构建图谱节点和关系
+            graph_result = self._build_knowledge_graph(normalized_mentions, sections, document_id)
+            
+            if graph_result['success']:
+                self.logger.info(f"知识图谱构建完成，文档ID: {document_id}, "
+                               f"实体数: {graph_result.get('entities_count', 0)}, "
+                               f"关系数: {graph_result.get('relations_count', 0)}")
+                
+                return {
+                    'success': True,
+                    'message': '知识图谱构建成功',
+                    'entities_count': graph_result.get('entities_count', 0),
+                    'relations_count': graph_result.get('relations_count', 0),
+                    'document_id': document_id
+                }
+            else:
+                return graph_result
+            
+        except Exception as e:
+            self.logger.error(f"知识图谱构建失败: {str(e)}")
+            return {
+                'success': False,
+                'message': f'知识图谱构建失败: {str(e)}',
+                'entities_count': 0,
+                'relations_count': 0
+            }
+    
+    def _process_section_blocks(self, section: Dict[str, Any], document_id: int) -> List[Dict[str, Any]]:
+        """
+        处理section中的blocks，进行实体识别和指标提取
+        
+        Args:
+            section: section数据
+            document_id: 文档ID
+            
+        Returns:
+            List[Dict[str, Any]]: mentions列表
+        """
+        try:
+            section_id = section.get('section_id', '')
+            blocks = section.get('blocks', [])
+            mentions = []
+            
+            for block in blocks:
+                elem_id = block.get('elem_id', '')
+                block_type = block.get('type', '').lower()
+                page = block.get('page', 1)
+                bbox = block.get('bbox', {})
+                
+                # 根据block类型提取文本内容
+                block_text = self._extract_block_text_for_ner(block, block_type)
+                
+                if not block_text.strip():
+                    continue
+                
+                # 实体识别
+                entities = self._extract_entities(block_text, elem_id, section_id, page, bbox)
+                mentions.extend(entities)
+                
+                # 指标/数值识别
+                metrics = self._extract_metrics(block_text, elem_id, section_id, page, bbox)
+                mentions.extend(metrics)
+            
+            return mentions
+            
+        except Exception as e:
+            self.logger.error(f"处理section blocks失败: {str(e)}")
+            return []
+    
+    def _extract_block_text_for_ner(self, block: Dict[str, Any], block_type: str) -> str:
+        """
+        根据block类型提取用于NER的文本内容
+        
+        Args:
+            block: block数据
+            block_type: block类型
+            
+        Returns:
+            str: 提取的文本内容
+        """
+        try:
+            if block_type == 'table':
+                # 对于table类型，使用rows中的row_text
+                rows = block.get('rows', [])
+                if rows:
+                    row_texts = [row.get('row_text', '') for row in rows if row.get('row_text', '').strip()]
+                    return ' '.join(row_texts)
+                else:
+                    return block.get('text', '')
+            
+            elif block_type == 'figure':
+                # 对于figure类型，使用caption
+                caption = block.get('caption', '')
+                if caption.strip():
+                    return caption
+                else:
+                    return block.get('text', '')
+            
+            else:
+                # 对于其他类型（paragraph等），使用text
+                return block.get('text', '')
+                
+        except Exception as e:
+            self.logger.warning(f"提取block文本失败: {str(e)}")
+            return block.get('text', '')
+    
+    def _extract_entities(self, text: str, elem_id: str, section_id: str, page: int, bbox: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        从文本中提取实体（使用规则+词典方法）
+        
+        Args:
+            text: 文本内容
+            elem_id: 元素ID
+            section_id: section ID
+            page: 页码
+            bbox: 边界框
+            
+        Returns:
+            List[Dict[str, Any]]: 实体mentions列表
+        """
+        try:
+            mentions = []
+            
+            # 定义实体词典（规则+词典方法）
+            # 注意：中文模式不使用\b边界，英文模式保留\b边界
+            entity_patterns = {
+                'CellLine': [
+                    r'CHO-K1', r'CHO\s*K1', r'CHO细胞', r'CHO',
+                    r'\bHEK293\b', r'\bHEK\s*293\b', r'\bVero\b', r'\bMDCK\b'
+                ],
+                'Protein': [
+                    r'\bHCP\b', r'宿主蛋白', r'宿主细胞蛋白', r'\bHost\s*Cell\s*Protein\b',
+                    r'蛋白质', r'蛋白', r'\bprotein\b'
+                ],
+                'Analyte': [
+                    r'\bHCP\b', r'分析物', r'待测物', r'\banalyte\b'
+                ],
+                'Reagent': [
+                    r'抗体', r'\bantibody\b', r'\bAb\b', r'\bmAb\b', r'单抗', r'单克隆抗体',
+                    r'试剂', r'\breagent\b', r'缓冲液', r'\bbuffer\b'
+                ],
+                'Product': [
+                    r'试剂盒', r'\bkit\b', r'\bassay\b', r'检测试剂盒', r'检测kit',
+                    r'\bELISA\b', r'\bWestern\b', r'\b2D\s*Gel\b'
+                ]
+            }
+            
+            # 对每种实体类型进行模式匹配
+            for entity_type, patterns in entity_patterns.items():
+                for pattern in patterns:
+                    matches = re.finditer(pattern, text, re.IGNORECASE)
+                    for match in matches:
+                        span_text = match.group()
+                        start_pos = match.start()
+                        end_pos = match.end()
+                        
+                        mention = {
+                            'elem_id': elem_id,
+                            'section_id': section_id,
+                            'span_text': span_text,
+                            'page': page,
+                            'bbox': bbox,
+                            'entity_type': entity_type,
+                            'start_pos': start_pos,
+                            'end_pos': end_pos,
+                            'mention_type': 'entity',
+                            'confidence': 0.8  # 规则匹配的置信度
+                        }
+                        mentions.append(mention)
+            
+            return mentions
+            
+        except Exception as e:
+            self.logger.error(f"实体提取失败: {str(e)}")
+            return []
+    
+    def _extract_metrics(self, text: str, elem_id: str, section_id: str, page: int, bbox: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        从文本中提取指标/数值（使用正则表达式）
+        
+        Args:
+            text: 文本内容
+            elem_id: 元素ID
+            section_id: section ID
+            page: 页码
+            bbox: 边界框
+            
+        Returns:
+            List[Dict[str, Any]]: 指标mentions列表
+        """
+        try:
+            mentions = []
+            
+            # 定义指标/数值的正则模式
+            metric_patterns = {
+                'Coverage': [
+                    r'覆盖率\s*[≥≤><!＞\d\.\-\s%]*\d+(?:\.\d+)?%',
+                    r'coverage\s*[≥≤><!＞\d\.\-\s%]*\d+(?:\.\d+)?%',
+                    r'\d+(?:\.\d+)?%\s*覆盖率',
+                    r'\d+(?:\.\d+)?%\s*coverage'
+                ],
+                'LinearRange': [
+                    r'线性范围\s*[:：]\s*\d+(?:\.\d+)?\s*[–\-~]\s*\d+(?:\.\d+)?\s*(?:ng/mL|μg/mL|mg/mL|ppm)',
+                    r'linear\s*range\s*[:：]\s*\d+(?:\.\d+)?\s*[–\-~]\s*\d+(?:\.\d+)?\s*(?:ng/mL|μg/mL|mg/mL|ppm)',
+                    r'\d+(?:\.\d+)?\s*[–\-~]\s*\d+(?:\.\d+)?\s*(?:ng/mL|μg/mL|mg/mL|ppm)',
+                    r'\d+(?:\.\d+)?\s*to\s*\d+(?:\.\d+)?\s*(?:ng/mL|μg/mL|mg/mL|ppm)'
+                ],
+                'RSquared': [
+                    r'R[²2]\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?',
+                    r'r[²2]\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?',
+                    r'R\s*squared\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?',
+                    r'相关系数\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?'
+                ],
+                'Sensitivity': [
+                    r'灵敏度\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?\s*(?:ng/mL|μg/mL|mg/mL|ppm)?',
+                    r'sensitivity\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?\s*(?:ng/mL|μg/mL|mg/mL|ppm)?',
+                    r'检测限\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?\s*(?:ng/mL|μg/mL|mg/mL|ppm)?'
+                ],
+                'Precision': [
+                    r'精密度\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?%',
+                    r'precision\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?%',
+                    r'CV\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?%',
+                    r'变异系数\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?%'
+                ],
+                'Recovery': [
+                    r'回收率\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?%',
+                    r'recovery\s*[≥≤><!＞=]\s*\d+(?:\.\d+)?%',
+                    r'\d+(?:\.\d+)?%\s*回收率',
+                    r'\d+(?:\.\d+)?%\s*recovery'
+                ],
+                'Concentration': [
+                    r'\d+(?:\.\d+)?\s*(?:ng/mL|μg/mL|mg/mL|ppm|nM|μM|mM)',
+                    r'\d+(?:\.\d+)?\s*(?:纳克|微克|毫克)/毫升'
+                ]
+            }
+            
+            # 对每种指标类型进行模式匹配
+            for metric_type, patterns in metric_patterns.items():
+                for pattern in patterns:
+                    matches = re.finditer(pattern, text, re.IGNORECASE)
+                    for match in matches:
+                        span_text = match.group()
+                        start_pos = match.start()
+                        end_pos = match.end()
+                        
+                        # 解析数值和单位
+                        parsed_value = self._parse_metric_value(span_text, metric_type)
+                        
+                        mention = {
+                            'elem_id': elem_id,
+                            'section_id': section_id,
+                            'span_text': span_text,
+                            'page': page,
+                            'bbox': bbox,
+                            'entity_type': 'Metric',
+                            'metric_type': metric_type,
+                            'parsed_value': parsed_value,
+                            'start_pos': start_pos,
+                            'end_pos': end_pos,
+                            'mention_type': 'metric',
+                            'confidence': 0.9  # 正则匹配的置信度较高
+                        }
+                        mentions.append(mention)
+            
+            return mentions
+            
+        except Exception as e:
+            self.logger.error(f"指标提取失败: {str(e)}")
+            return []
+    
+    def _parse_metric_value(self, span_text: str, metric_type: str) -> Dict[str, Any]:
+        """
+        解析指标数值和单位
+        
+        Args:
+            span_text: 匹配的文本
+            metric_type: 指标类型
+            
+        Returns:
+            Dict[str, Any]: 解析结果
+        """
+        try:
+            result = {'raw_text': span_text}
+            
+            # 提取数值
+            number_pattern = r'\d+(?:\.\d+)?'
+            numbers = re.findall(number_pattern, span_text)
+            
+            # 提取单位
+            unit_pattern = r'(?:ng/mL|μg/mL|mg/mL|ppm|nM|μM|mM|%)'
+            units = re.findall(unit_pattern, span_text, re.IGNORECASE)
+            
+            # 提取操作符
+            operator_pattern = r'[≥≤><!＞=]+'
+            operators = re.findall(operator_pattern, span_text)
+            
+            if numbers:
+                result['numbers'] = [float(num) for num in numbers]
+            if units:
+                result['units'] = units
+            if operators:
+                result['operators'] = operators
+            
+            # 根据指标类型进行特殊处理
+            if metric_type == 'LinearRange' and len(numbers) >= 2:
+                result['range_min'] = float(numbers[0])
+                result['range_max'] = float(numbers[1])
+            elif metric_type in ['Coverage', 'Precision', 'Recovery'] and numbers:
+                result['percentage'] = float(numbers[0])
+            elif metric_type == 'RSquared' and numbers:
+                result['r_squared'] = float(numbers[0])
+            elif metric_type in ['Sensitivity', 'Concentration'] and numbers:
+                result['value'] = float(numbers[0])
+                if units:
+                    result['unit'] = units[0]
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"解析指标数值失败: {str(e)}")
+            return {'raw_text': span_text}
+    
+    def _normalize_mentions(self, mentions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        规范化实体mentions（别名/缩写表）
+        
+        Args:
+            mentions: 原始mentions列表
+            
+        Returns:
+            List[Dict[str, Any]]: 规范化后的mentions列表
+        """
+        try:
+            # 定义规范化词典（别名/缩写表）
+            normalization_dict = {
+                'CellLine': {
+                    'CHO': 'CHO-K1',
+                    'CHO K1': 'CHO-K1',
+                    'CHO细胞': 'CHO-K1',
+                    'HEK 293': 'HEK293',
+                    'HEK-293': 'HEK293'
+                },
+                'Protein': {
+                    'HCP': '宿主细胞蛋白',
+                    '宿主蛋白': '宿主细胞蛋白',
+                    'Host Cell Protein': '宿主细胞蛋白',
+                    '蛋白': '蛋白质'
+                },
+                'Analyte': {
+                    'HCP': '宿主细胞蛋白',
+                    '待测物': '分析物'
+                },
+                'Reagent': {
+                    'mAb': '单克隆抗体',
+                    'Ab': '抗体',
+                    'antibody': '抗体'
+                },
+                'Product': {
+                    'kit': '试剂盒',
+                    'assay': '检测试剂盒',
+                    '检测kit': '检测试剂盒'
+                }
+            }
+            
+            normalized_mentions = []
+            entity_uid_counter = {}
+            
+            for mention in mentions:
+                entity_type = mention.get('entity_type', '')
+                span_text = mention.get('span_text', '')
+                
+                # 规范化实体名称
+                normalized_name = span_text
+                if entity_type in normalization_dict:
+                    normalized_name = normalization_dict[entity_type].get(span_text, span_text)
+                
+                # 生成唯一UID
+                uid_key = f"{entity_type}_{normalized_name}"
+                if uid_key not in entity_uid_counter:
+                    entity_uid_counter[uid_key] = 1
+                else:
+                    entity_uid_counter[uid_key] += 1
+                
+                entity_uid = f"{entity_type}_{normalized_name}_{entity_uid_counter[uid_key]}"
+                
+                # 更新mention信息
+                normalized_mention = mention.copy()
+                normalized_mention['normalized_name'] = normalized_name
+                normalized_mention['entity_uid'] = entity_uid
+                normalized_mention['original_span'] = span_text
+                
+                normalized_mentions.append(normalized_mention)
+            
+            self.logger.info(f"实体规范化完成，处理mentions: {len(normalized_mentions)}")
+            return normalized_mentions
+            
+        except Exception as e:
+            self.logger.error(f"实体规范化失败: {str(e)}")
+            return mentions
+    
+    def _build_knowledge_graph(self, mentions: List[Dict[str, Any]], sections: List[Dict[str, Any]], document_id: int) -> Dict[str, Any]:
+        """
+        构建知识图谱节点和关系
+        
+        Args:
+            mentions: 规范化后的mentions列表
+            sections: sections数据
+            document_id: 文档ID
+            
+        Returns:
+            Dict[str, Any]: 构建结果
+        """
+        try:
+            entities_created = 0
+            relations_created = 0
+            
+            # 1. 创建Section节点
+            for section in sections:
+                section_result = self._create_section_node(section, document_id)
+                if section_result:
+                    entities_created += 1
+            
+            # 2. 创建Block节点
+            for section in sections:
+                blocks = section.get('blocks', [])
+                for block in blocks:
+                    block_result = self._create_block_node(block, section.get('section_id', ''), document_id)
+                    if block_result:
+                        entities_created += 1
+            
+            # 3. 创建Entity节点和Claim节点
+            unique_entities = {}
+            claims = []
+            
+            for mention in mentions:
+                entity_uid = mention.get('entity_uid', '')
+                if entity_uid not in unique_entities:
+                    entity_result = self._create_entity_node(mention, document_id)
+                    if entity_result:
+                        unique_entities[entity_uid] = mention
+                        entities_created += 1
+                
+                # 如果是指标类型，创建Claim节点
+                if mention.get('mention_type') == 'metric':
+                    claim_result = self._create_claim_node(mention, document_id)
+                    if claim_result:
+                        claims.append(mention)
+                        entities_created += 1
+            
+            # 4. 创建关系
+            # 4.1 创建MENTIONS关系
+            for mention in mentions:
+                mention_relation = self._create_mentions_relation(mention, document_id)
+                if mention_relation:
+                    relations_created += 1
+            
+            # 4.2 创建HAS_ENTITY关系
+            for section in sections:
+                section_id = section.get('section_id', '')
+                section_mentions = [m for m in mentions if m.get('section_id') == section_id]
+                
+                for mention in section_mentions:
+                    has_entity_relation = self._create_has_entity_relation(section_id, mention, document_id)
+                    if has_entity_relation:
+                        relations_created += 1
+            
+            # 4.3 创建语义关系
+            semantic_relations = self._create_semantic_relations(mentions, document_id)
+            relations_created += semantic_relations
+            
+            self.logger.info(f"知识图谱构建完成，实体: {entities_created}, 关系: {relations_created}")
             
             return {
                 'success': True,
-                'message': 'PDF知识图谱构建成功',
-                'nodes_count': nodes_created,
-                'relationships_count': relationships_created,
-                'document_id': document_id
+                'entities_count': entities_created,
+                'relations_count': relations_created,
+                'unique_entities': len(unique_entities),
+                'claims_count': len(claims)
             }
             
         except Exception as e:
-            self.logger.error(f"PDF知识图谱构建失败: {str(e)}")
+            self.logger.error(f"知识图谱构建失败: {str(e)}")
             return {
                 'success': False,
-                'message': f'PDF知识图谱构建失败: {str(e)}',
-                'nodes_count': 0,
-                'relationships_count': 0
+                'message': f'知识图谱构建失败: {str(e)}',
+                'entities_count': 0,
+                'relations_count': 0
             }
-    
-    def _is_content_units_format(self, json_data) -> bool:
-        """
-        判断JSON数据是否为content_units格式
-        
-        Args:
-            json_data: JSON数据
-            
-        Returns:
-            bool: 是否为content_units格式
-        """
+
+
+    def _create_section_node(self, section, document_id):
+        """创建Section节点 - 双写到MySQL和Neo4j"""
         try:
-            # content_units.json是一个列表，每个元素包含content, content_type等字段
-            if isinstance(json_data, list) and len(json_data) > 0:
-                first_item = json_data[0]
-                required_fields = ['content', 'content_type', 'title', 'element_id']
-                return all(field in first_item for field in required_fields)
-            return False
-        except Exception:
-            return False
-    
-    def _parse_content_units_to_graph_structure(self, content_units_data: List[Dict[str, Any]], document_id: int) -> Dict[str, Any]:
-        """
-        基于content_units.json构建知识图谱结构
-        按照新的设计：Section -> Paragraph/Figure/Table -> 详细关系
-        
-        Args:
-            content_units_data: content_units.json数据
-            document_id: 文档ID
+            section_id = section.get('section_id', '')
+            title = section.get('title', '')
             
-        Returns:
-            Dict[str, Any]: 图谱结构数据
-        """
-        try:
-            # 存储图谱结构
-            graph_structure = {
-                'document_node': None,
-                'section_nodes': [],  # Section节点（每个content unit对应一个section）
-                'paragraph_nodes': [],  # Paragraph节点（正文内容）
-                'figure_nodes': [],  # Figure节点（图片）
-                'table_nodes': [],  # Table节点（表格）
-                'table_row_nodes': [],  # 表格行节点
-                'table_cell_nodes': [],  # 表格单元格节点
-                'section_relationships': [],  # Section之间的关系
-                'content_relationships': [],  # HAS_CONTENT关系
-                'sequence_relationships': [],  # NEXT顺序关系
-                'illustration_relationships': [],  # ILLUSTRATES关系
-                'table_relationships': [],  # 表格内部关系
-                'semantic_entities': [],  # 语义实体
-                'entity_relationships': []  # 实体关系
+            # MySQL数据
+            section_data = {
+                'document_id': document_id,
+                'section_id': section_id,
+                'title': title,
+                'node_type': 'Section'
             }
+            mysql_success = self.mysql_manager.insert_data('graph_nodes', section_data)
             
-            # 创建文档根节点
-            doc_node_id = f"doc_{document_id}"
-            graph_structure['document_node'] = {
-                'id': doc_node_id,
-                'type': 'Document',
-                'properties': {
-                    'id': doc_node_id,  # 添加id属性用于关系匹配
-                    'document_id': document_id,
-                    'filename': f'document_{document_id}',
-                    'total_sections': len(content_units_data),
-                    'created_time': datetime.now().isoformat()
-                }
-            }
-            
-            all_content_nodes = []  # 用于建立顺序链
-            
-            # 步骤1: 处理每个content unit作为一个Section
-            for unit_index, unit in enumerate(content_units_data):
-                section_node = self._create_section_node(unit, document_id, unit_index)
-                if section_node:
-                    graph_structure['section_nodes'].append(section_node)
-                    
-                    # 步骤2: 为每个Section创建子节点
-                    content_nodes = []
-                    order_index = 0
-                    
-                    # 创建Paragraph节点（从content中提取正文）
-                    paragraph_node = self._create_paragraph_node(unit, document_id, unit_index)
-                    if paragraph_node:
-                        graph_structure['paragraph_nodes'].append(paragraph_node)
-                        content_nodes.append(paragraph_node)
-                        all_content_nodes.append(paragraph_node)
-                        
-                        # 步骤3: 建立HAS_CONTENT关系，保持阅读顺序
-                        graph_structure['content_relationships'].append({
-                            'source_id': section_node['id'],
-                            'target_id': paragraph_node['id'],
-                            'relationship_type': 'HAS_CONTENT',
-                            'properties': {
-                                'order': order_index,
-                                'content_type': 'paragraph',
-                                'document_id': document_id,
-                                'created_time': datetime.now().isoformat()
-                            }
-                        })
-                        order_index += 1
-                    
-                    # 创建Table节点
-                    if 'table' in unit and unit['table']:
-                        for table_index, table_data in enumerate(unit['table']):
-                            table_node = self._create_table_node(table_data, unit, document_id, unit_index, table_index)
-                            if table_node:
-                                graph_structure['table_nodes'].append(table_node)
-                                content_nodes.append(table_node)
-                                all_content_nodes.append(table_node)
-                                
-                                # 建立HAS_CONTENT关系
-                                graph_structure['content_relationships'].append({
-                                    'source_id': section_node['id'],
-                                    'target_id': table_node['id'],
-                                    'relationship_type': 'HAS_CONTENT',
-                                    'properties': {
-                                        'order': order_index,
-                                        'content_type': 'table',
-                                        'document_id': document_id,
-                                        'created_time': datetime.now().isoformat()
-                                    }
-                                })
-                                order_index += 1
-                                
-                                # 步骤4: 创建表格行列关系
-                                self._create_table_structure(table_node, table_data, graph_structure, document_id)
-                    
-                    # 创建Figure节点
-                    if 'img' in unit and unit['img']:
-                        for img_index, img_data in enumerate(unit['img']):
-                            figure_node = self._create_figure_node(img_data, unit, document_id, unit_index, img_index)
-                            if figure_node:
-                                graph_structure['figure_nodes'].append(figure_node)
-                                content_nodes.append(figure_node)
-                                all_content_nodes.append(figure_node)
-                                
-                                # 建立HAS_CONTENT关系
-                                graph_structure['content_relationships'].append({
-                                    'source_id': section_node['id'],
-                                    'target_id': figure_node['id'],
-                                    'relationship_type': 'HAS_CONTENT',
-                                    'properties': {
-                                        'order': order_index,
-                                        'content_type': 'figure',
-                                        'document_id': document_id,
-                                        'created_time': datetime.now().isoformat()
-                                    }
-                                })
-                                order_index += 1
-                                
-                                # 步骤5: 建立ILLUSTRATES关系（图片说明内容）
-                                if paragraph_node:
-                                    graph_structure['illustration_relationships'].append({
-                                        'source_id': figure_node['id'],
-                                        'target_id': paragraph_node['id'],
-                                        'relationship_type': 'ILLUSTRATES',
-                                        'properties': {
-                                            'illustration_type': img_data.get('image_type', 'general'),
-                                            'ocr_text': img_data.get('ocr_text', ''),
-                                            'document_id': document_id,
-                                            'created_time': datetime.now().isoformat()
-                                        }
-                                    })
-                    
-                    # 提取语义实体
-                    section_entities = self._extract_semantic_entities_from_section(section_node, unit, document_id)
-                    graph_structure['semantic_entities'].extend(section_entities)
-            
-            # 步骤6: 建立Section之间的顺序关系（NEXT链）
-            self._build_section_sequence_chain(graph_structure['section_nodes'], graph_structure['section_relationships'], document_id)
-            
-            # 步骤7: 建立所有内容节点的顺序链（保证原文复原）
-            self._build_content_sequence_chain(all_content_nodes, graph_structure['sequence_relationships'], document_id)
-            
-            # 建立语义实体之间的关系
-            entity_relationships = self._build_entity_relationships_from_sections(graph_structure['semantic_entities'], document_id)
-            graph_structure['entity_relationships'].extend(entity_relationships)
-            
-            self.logger.info(f"Content Units图谱结构解析完成，文档ID: {document_id}, Section数: {len(graph_structure['section_nodes'])}")
-            return graph_structure
-            
-        except Exception as e:
-            self.logger.error(f"解析Content Units图谱结构失败: {str(e)}")
-            return {}
-    
-    def _create_section_node(self, unit: Dict[str, Any], document_id: int, unit_index: int) -> Optional[Dict[str, Any]]:
-        """创建Section节点，使用Title的element_id作为section_id"""
-        try:
-            element_id = unit.get('element_id', f"section_{unit_index}")
-            title = unit.get('title', '').strip()
-            content_type = unit.get('content_type', 'title_with_content')
-            
-            node_id = f"section_{document_id}_{element_id}"
-            section_node = {
-                'id': node_id,
-                'type': 'Section',
-                'properties': {
-                    'id': node_id,  # 添加id属性用于关系匹配
-                    'section_id': element_id,
-                    'title': title,
-                    'content_type': content_type,
-                    'page_number': unit.get('page_number', 1),
-                    'element_ids': json.dumps(unit.get('element_ids', []), ensure_ascii=False),
-                    'hierarchy_level': unit.get('hierarchy_info', {}).get('title_level', 1),
-                    'hierarchy_depth': unit.get('hierarchy_info', {}).get('hierarchy_depth', 1),
-                    'coordinates': json.dumps(unit.get('coordinates', {}), ensure_ascii=False),
-                    'has_table': len(unit.get('table', [])) > 0,
-                    'has_image': len(unit.get('img', [])) > 0,
-                    'has_chars': len(unit.get('chars', [])) > 0,
-                    'document_id': document_id,
-                    'order_in_document': unit_index,
-                    'created_time': datetime.now().isoformat()
-                }
-            }
-            
-            return section_node
-            
-        except Exception as e:
-            self.logger.error(f"创建Section节点失败: {str(e)}")
-            return None
-    
-    def _create_paragraph_node(self, unit: Dict[str, Any], document_id: int, unit_index: int) -> Optional[Dict[str, Any]]:
-        """创建Paragraph节点，从content中提取正文内容"""
-        try:
-            element_id = unit.get('element_id', f"section_{unit_index}")
-            content = unit.get('content', '').strip()
-            
-            # 提取正文内容（去掉标题部分）
-            content_lines = content.split('\n')
-            paragraph_text = ''
-            
-            for line in content_lines:
-                if not line.startswith('标题:') and not line.startswith('图片内容:') and not line.startswith('表格数据:'):
-                    paragraph_text += line.strip() + ' '
-            
-            paragraph_text = paragraph_text.strip()
-            
-            if not paragraph_text:
-                return None
-            
-            node_id = f"paragraph_{document_id}_{element_id}"
-            paragraph_node = {
-                'id': node_id,
-                'type': 'Paragraph',
-                'properties': {
-                    'id': node_id,  # 添加id属性用于关系匹配
-                    'text': paragraph_text,
-                    'original_content': content,
-                    'section_id': element_id,
-                    'page_number': unit.get('page_number', 1),
-                    'word_count': len(paragraph_text.split()),
-                    'char_count': len(paragraph_text),
-                    'document_id': document_id,
-                    'created_time': datetime.now().isoformat()
-                }
-            }
-            
-            return paragraph_node
-            
-        except Exception as e:
-            self.logger.error(f"创建Paragraph节点失败: {str(e)}")
-            return None
-    
-    def _create_table_node(self, table_data: Dict[str, Any], unit: Dict[str, Any], document_id: int, unit_index: int, table_index: int) -> Optional[Dict[str, Any]]:
-        """创建Table节点"""
-        try:
-            table_element_id = table_data.get('element_id', f"table_{unit_index}_{table_index}")
-            section_id = unit.get('element_id', f"section_{unit_index}")
-            raw_text = table_data.get('raw_text', '').strip()
-            
-            if not raw_text:
-                return None
-            
-            node_id = f"table_{document_id}_{table_element_id}"
-            table_node = {
-                'id': node_id,
-                'type': 'Table',
-                'properties': {
-                    'id': node_id,  # 添加id属性用于关系匹配
-                    'table_id': table_element_id,
+            # Neo4j数据
+            neo4j_success = True
+            try:
+                neo4j_properties = {
                     'section_id': section_id,
-                    'raw_text': raw_text,
-                    'table_type': table_data.get('table_type', 'general'),
-                    'structured_html': table_data.get('structured_html', ''),
-                    'parsed_data': json.dumps(table_data.get('parsed_data', {}), ensure_ascii=False),
-                    'page_number': table_data.get('page_number', unit.get('page_number', 1)),
-                    'coordinates': json.dumps(table_data.get('coordinates', {}), ensure_ascii=False),
-                    'row_count': len(table_data.get('parsed_data', {}).get('rows', [])),
-                    'header_count': len(table_data.get('parsed_data', {}).get('headers', [])),
-                    'document_id': document_id,
-                    'created_time': datetime.now().isoformat()
-                }
-            }
-            
-            return table_node
-            
-        except Exception as e:
-            self.logger.error(f"创建Table节点失败: {str(e)}")
-            return None
-    
-    def _create_figure_node(self, img_data: Dict[str, Any], unit: Dict[str, Any], document_id: int, unit_index: int, img_index: int) -> Optional[Dict[str, Any]]:
-        """创建Figure节点"""
-        try:
-            img_element_id = img_data.get('element_id', f"img_{unit_index}_{img_index}")
-            section_id = unit.get('element_id', f"section_{unit_index}")
-            ocr_text = img_data.get('ocr_text', '').strip()
-            
-            node_id = f"figure_{document_id}_{img_element_id}"
-            figure_node = {
-                'id': node_id,
-                'type': 'Figure',
-                'properties': {
-                    'id': node_id,  # 添加id属性用于关系匹配
-                    'figure_id': img_element_id,
-                    'section_id': section_id,
-                    'ocr_text': ocr_text,
-                    'image_type': img_data.get('image_type', 'general'),
-                    'description': img_data.get('description', ''),
-                    'image_path': img_data.get('image_path', ''),
-                    'page_number': img_data.get('page_number', unit.get('page_number', 1)),
-                    'coordinates': json.dumps(img_data.get('coordinates', {}), ensure_ascii=False),
-                    'has_ocr_text': bool(ocr_text),
-                    'document_id': document_id,
-                    'created_time': datetime.now().isoformat()
-                }
-            }
-            
-            return figure_node
-            
-        except Exception as e:
-            self.logger.error(f"创建Figure节点失败: {str(e)}")
-            return None
-    
-    def _create_content_unit_node(self, unit: Dict[str, Any], document_id: int, unit_index: int) -> Optional[Dict[str, Any]]:
-        """创建内容单元节点（包含完整的标题+内容）"""
-        try:
-            element_id = unit.get('element_id', f"unit_{unit_index}")
-            title = unit.get('title', '').strip()
-            content = unit.get('content', '').strip()
-            
-            if not content:
-                return None
-            
-            content_unit_node = {
-                'id': f"content_unit_{document_id}_{element_id}",
-                'type': 'ContentUnit',
-                'properties': {
                     'title': title,
-                    'content': content,
-                    'complete_text': content,  # 完整文本（标题+内容）
-                    'content_type': unit.get('content_type', 'title_with_content'),
-                    'original_element_id': element_id,
                     'document_id': document_id,
-                    'page_number': unit.get('page_number', 1),
-                    'element_ids': json.dumps(unit.get('element_ids', []), ensure_ascii=False),
-                    'coordinates': json.dumps(unit.get('coordinates', {}), ensure_ascii=False),
-                    'has_table': len(unit.get('table', [])) > 0,
-                    'has_image': len(unit.get('img', [])) > 0,
-                    'created_time': datetime.now().isoformat()
+                    'node_type': 'Section',
+                    'created_at': datetime.now().isoformat()
                 }
-            }
+                neo4j_node_id = self.neo4j_manager.create_node('Section', neo4j_properties)
+                neo4j_success = neo4j_node_id is not None
+                self.logger.debug(f"Neo4j Section节点创建: {neo4j_success}, ID: {neo4j_node_id}")
+            except Exception as e:
+                self.logger.warning(f"Neo4j Section节点创建失败: {e}")
+                neo4j_success = False
             
-            return content_unit_node
+            # 只要MySQL成功就认为成功（Neo4j是辅助存储）
+            return mysql_success
             
         except Exception as e:
-            self.logger.error(f"创建内容单元节点失败: {str(e)}")
-            return None
-    
-    def _create_pure_title_node(self, unit: Dict[str, Any], document_id: int, unit_index: int) -> Optional[Dict[str, Any]]:
-        """创建纯标题节点"""
+            self.logger.error(f"创建Section节点失败: {e}")
+            return False
+
+    def _create_block_node(self, block, section_id, document_id):
+        """创建Block节点 - 双写到MySQL和Neo4j"""
         try:
-            element_id = unit.get('element_id', f"unit_{unit_index}")
-            title = unit.get('title', '').strip()
+            elem_id = block.get('elem_id', '')
+            block_type = block.get('type', '')
             
-            if not title:
-                return None
+            # MySQL数据
+            block_data = {
+                'document_id': document_id,
+                'elem_id': elem_id,
+                'section_id': section_id,
+                'node_type': 'Block'
+            }
+            mysql_success = self.mysql_manager.insert_data('graph_nodes', block_data)
             
-            title_node = {
-                'id': f"title_{document_id}_{element_id}",
-                'type': 'Title',
-                'properties': {
-                    'text': title,
-                    'original_element_id': element_id,
+            # Neo4j数据
+            try:
+                neo4j_properties = {
+                    'elem_id': elem_id,
+                    'section_id': section_id,
+                    'block_type': block_type,
                     'document_id': document_id,
-                    'page_number': unit.get('page_number', 1),
-                    'title_level': unit.get('hierarchy_info', {}).get('title_level', 1),
-                    'hierarchy_depth': unit.get('hierarchy_info', {}).get('hierarchy_depth', 1),
-                    'created_time': datetime.now().isoformat()
+                    'node_type': 'Block',
+                    'created_at': datetime.now().isoformat()
                 }
-            }
+                neo4j_node_id = self.neo4j_manager.create_node('Block', neo4j_properties)
+                self.logger.debug(f"Neo4j Block节点创建: {neo4j_node_id is not None}, ID: {neo4j_node_id}")
+            except Exception as e:
+                self.logger.warning(f"Neo4j Block节点创建失败: {e}")
             
-            return title_node
+            return mysql_success
             
         except Exception as e:
-            self.logger.error(f"创建纯标题节点失败: {str(e)}")
-            return None
-    
-    def _create_table_element_node(self, table: Dict[str, Any], unit: Dict[str, Any], document_id: int, unit_index: int, table_index: int) -> Optional[Dict[str, Any]]:
-        """创建表格元素节点"""
+            self.logger.error(f"创建Block节点失败: {e}")
+            return False
+
+    def _create_entity_node(self, mention, document_id):
+        """创建Entity节点 - 双写到MySQL和Neo4j"""
         try:
-            table_id = table.get('element_id', f"unit_{unit_index}_table_{table_index}")
-            raw_text = table.get('raw_text', '').strip()
+            entity_uid = mention.get('entity_uid', '')
+            name = mention.get('normalized_name', '')
+            entity_type = mention.get('entity_type', '')
+            span_text = mention.get('span_text', '')
             
-            if not raw_text:
-                return None
+            # MySQL数据
+            entity_data = {
+                'document_id': document_id,
+                'entity_uid': entity_uid,
+                'name': name,
+                'entity_type': entity_type,
+                'node_type': 'Entity'
+            }
+            mysql_success = self.mysql_manager.insert_data('graph_nodes', entity_data)
             
-            table_node = {
-                'id': f"table_{document_id}_{table_id}",
-                'type': 'Table',
-                'properties': {
-                    'raw_text': raw_text,
-                    'table_type': table.get('table_type', 'general'),
-                    'structured_html': table.get('structured_html', ''),
-                    'parsed_data': json.dumps(table.get('parsed_data', {}), ensure_ascii=False),
-                    'original_element_id': table_id,
+            # Neo4j数据
+            try:
+                # 使用entity_type作为Neo4j标签，如果为空则使用Entity
+                neo4j_label = entity_type if entity_type else 'Entity'
+                neo4j_properties = {
+                    'entity_uid': entity_uid,
+                    'name': name,
+                    'entity_type': entity_type,
+                    'span_text': span_text,
                     'document_id': document_id,
-                    'page_number': table.get('page_number', unit.get('page_number', 1)),
-                    'parent_unit_id': f"content_unit_{document_id}_{unit.get('element_id', f'unit_{unit_index}')}",
-                    'coordinates': json.dumps(table.get('coordinates', {}), ensure_ascii=False),
-                    'created_time': datetime.now().isoformat()
+                    'node_type': 'Entity',
+                    'created_at': datetime.now().isoformat()
                 }
-            }
+                neo4j_node_id = self.neo4j_manager.create_node(neo4j_label, neo4j_properties)
+                self.logger.debug(f"Neo4j Entity节点创建: {neo4j_node_id is not None}, 标签: {neo4j_label}, ID: {neo4j_node_id}")
+            except Exception as e:
+                self.logger.warning(f"Neo4j Entity节点创建失败: {e}")
             
-            return table_node
+            return mysql_success
             
         except Exception as e:
-            self.logger.error(f"创建表格元素节点失败: {str(e)}")
-            return None
-    
-    def _create_image_element_node(self, img: Dict[str, Any], unit: Dict[str, Any], document_id: int, unit_index: int, img_index: int) -> Optional[Dict[str, Any]]:
-        """创建图片元素节点"""
+            self.logger.error(f"创建Entity节点失败: {e}")
+            return False
+
+    def _create_claim_node(self, mention, document_id):
+        """创建Claim节点 - 双写到MySQL和Neo4j"""
         try:
-            img_id = img.get('element_id', f"unit_{unit_index}_img_{img_index}")
-            ocr_text = img.get('ocr_text', '').strip()
+            if mention.get('mention_type') != 'metric':
+                return False
+                
+            claim_id = f"claim_{document_id}_{hash(mention.get('span_text', '')) % 10000}"
+            metric_type = mention.get('metric_type', '')
+            span_text = mention.get('span_text', '')
             
-            img_node = {
-                'id': f"image_{document_id}_{img_id}",
-                'type': 'Image',
-                'properties': {
-                    'ocr_text': ocr_text,
-                    'image_type': img.get('image_type', 'general'),
-                    'description': img.get('description', ''),
-                    'image_path': img.get('image_path', ''),
-                    'original_element_id': img_id,
+            # MySQL数据
+            claim_data = {
+                'document_id': document_id,
+                'claim_id': claim_id,
+                'metric_type': metric_type,
+                'node_type': 'Claim'
+            }
+            mysql_success = self.mysql_manager.insert_data('graph_nodes', claim_data)
+            
+            # Neo4j数据
+            try:
+                neo4j_properties = {
+                    'claim_id': claim_id,
+                    'metric_type': metric_type,
+                    'span_text': span_text,
                     'document_id': document_id,
-                    'page_number': img.get('page_number', unit.get('page_number', 1)),
-                    'parent_unit_id': f"content_unit_{document_id}_{unit.get('element_id', f'unit_{unit_index}')}",
-                    'coordinates': json.dumps(img.get('coordinates', {}), ensure_ascii=False),
-                    'created_time': datetime.now().isoformat()
+                    'node_type': 'Claim',
+                    'created_at': datetime.now().isoformat()
                 }
-            }
+                neo4j_node_id = self.neo4j_manager.create_node('Claim', neo4j_properties)
+                self.logger.debug(f"Neo4j Claim节点创建: {neo4j_node_id is not None}, ID: {neo4j_node_id}")
+            except Exception as e:
+                self.logger.warning(f"Neo4j Claim节点创建失败: {e}")
             
-            return img_node
-            
-        except Exception as e:
-            self.logger.error(f"创建图片元素节点失败: {str(e)}")
-            return None
-    
-    def _extract_semantic_entities_from_unit(self, content_unit_node: Dict[str, Any], unit: Dict[str, Any], document_id: int) -> List[Dict[str, Any]]:
-        """从内容单元中提取语义实体"""
-        try:
-            content = content_unit_node['properties']['content']
-            title = content_unit_node['properties']['title']
-            content_unit_id = content_unit_node['id']
-            
-            entities = []
-            
-            # 从标题中提取关键概念
-            if title:
-                title_concepts = self._extract_concepts(title)
-                for concept in title_concepts:
-                    entities.append({
-                        'id': f"entity_{document_id}_{len(entities)}",
-                        'type': 'TitleConcept',
-                        'properties': {
-                            'name': concept,
-                            'entity_type': 'title_concept',
-                            'source_unit_id': content_unit_id,
-                            'document_id': document_id,
-                            'context': title,
-                            'created_time': datetime.now().isoformat()
-                        }
-                    })
-            
-            # 从内容中提取关键概念
-            content_concepts = self._extract_concepts(content)
-            for concept in content_concepts:
-                entities.append({
-                    'id': f"entity_{document_id}_{len(entities)}",
-                    'type': 'ContentConcept',
-                    'properties': {
-                        'name': concept,
-                        'entity_type': 'content_concept',
-                        'source_unit_id': content_unit_id,
-                        'document_id': document_id,
-                        'context': content[:200],
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-            
-            # 提取产品和技术名称
-            products = self._extract_products_and_technologies(content)
-            for product in products:
-                entities.append({
-                    'id': f"entity_{document_id}_{len(entities)}",
-                    'type': 'Product',
-                    'properties': {
-                        'name': product,
-                        'entity_type': 'product',
-                        'source_unit_id': content_unit_id,
-                        'document_id': document_id,
-                        'context': content[:200],
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-            
-            # 提取技术规格
-            specifications = self._extract_specifications(content)
-            for spec in specifications:
-                entities.append({
-                    'id': f"entity_{document_id}_{len(entities)}",
-                    'type': 'Specification',
-                    'properties': {
-                        'name': spec['name'],
-                        'value': spec['value'],
-                        'entity_type': 'specification',
-                        'source_unit_id': content_unit_id,
-                        'document_id': document_id,
-                        'context': content[:200],
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-            
-            return entities
+            return mysql_success
             
         except Exception as e:
-            self.logger.error(f"从内容单元提取语义实体失败: {str(e)}")
-            return []
-    
-    def _build_content_unit_hierarchy(self, content_unit_nodes: List[Dict[str, Any]], unit_relationships: List[Dict[str, Any]], document_id: int) -> None:
-        """构建内容单元之间的层级关系"""
+            self.logger.error(f"创建Claim节点失败: {e}")
+            return False
+
+    def _create_mentions_relation(self, mention, document_id):
+        """创建MENTIONS关系 - 双写到MySQL和Neo4j"""
         try:
-            # 按页码和标题级别排序
-            sorted_units = sorted(content_unit_nodes, key=lambda x: (
-                x['properties']['page_number'], 
-                x['properties'].get('title_level', 1)
-            ))
-            
-            # 建立相邻单元的关系
-            for i in range(len(sorted_units) - 1):
-                current_unit = sorted_units[i]
-                next_unit = sorted_units[i + 1]
-                
-                unit_relationships.append({
-                    'source_id': current_unit['id'],
-                    'target_id': next_unit['id'],
-                    'relationship_type': 'FOLLOWED_BY',
-                    'properties': {
-                        'document_id': document_id,
-                        'sequence_order': i,
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-                
-        except Exception as e:
-            self.logger.error(f"构建内容单元层级关系失败: {str(e)}")
-    
-    def _build_entity_relationships_from_units(self, entities: List[Dict[str, Any]], document_id: int) -> List[Dict[str, Any]]:
-        """构建基于内容单元的实体关系"""
-        try:
-            relationships = []
-            
-            # 按源单元分组实体
-            unit_entities = {}
-            for entity in entities:
-                source_unit_id = entity['properties']['source_unit_id']
-                if source_unit_id not in unit_entities:
-                    unit_entities[source_unit_id] = []
-                unit_entities[source_unit_id].append(entity)
-            
-            # 在同一单元内建立实体关系
-            for unit_id, unit_entity_list in unit_entities.items():
-                for i, entity1 in enumerate(unit_entity_list):
-                    for j, entity2 in enumerate(unit_entity_list):
-                        if i >= j:
-                            continue
-                        
-                        rel_type = self._determine_entity_relationship_type(entity1, entity2)
-                        if rel_type:
-                            relationships.append({
-                                'source_id': entity1['id'],
-                                'target_id': entity2['id'],
-                                'relationship_type': rel_type,
-                                'properties': {
-                                    'confidence': 0.8,
-                                    'document_id': document_id,
-                                    'relationship_basis': 'same_unit_co_occurrence',
-                                    'source_unit_id': unit_id,
-                                    'created_time': datetime.now().isoformat()
-                                }
-                            })
-            
-            return relationships
-            
-        except Exception as e:
-            self.logger.error(f"构建单元实体关系失败: {str(e)}")
-            return []
-    
-    def _create_table_structure(self, table_node: Dict[str, Any], table_data: Dict[str, Any], graph_structure: Dict[str, Any], document_id: int) -> None:
-        """创建表格行列结构，建立SAME_ROW_AS关系"""
-        try:
-            parsed_data = table_data.get('parsed_data', {})
-            headers = parsed_data.get('headers', [])
-            rows = parsed_data.get('rows', [])
-            
-            table_id = table_node['id']
-            
-            # 创建表头行节点
-            if headers:
-                row_node_id = f"{table_id}_header_row"
-                header_row_node = {
-                    'id': row_node_id,
-                    'type': 'TableRow',
-                    'properties': {
-                        'id': row_node_id,  # 添加id属性用于关系匹配
-                        'table_id': table_id,
-                        'row_type': 'header',
-                        'row_index': 0,
-                        'cell_count': len(headers),
-                        'content': ' | '.join(headers),
-                        'document_id': document_id,
-                        'created_time': datetime.now().isoformat()
-                    }
-                }
-                graph_structure['table_row_nodes'].append(header_row_node)
-                
-                # 建立表格与行的关系
-                graph_structure['table_relationships'].append({
-                    'source_id': table_id,
-                    'target_id': header_row_node['id'],
-                    'relationship_type': 'HAS_ROW',
-                    'properties': {
-                        'row_index': 0,
-                        'row_type': 'header',
-                        'document_id': document_id,
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-                
-                # 为表头创建单元格节点
-                for col_index, header in enumerate(headers):
-                    cell_node_id = f"{table_id}_header_cell_{col_index}"
-                    cell_node = {
-                        'id': cell_node_id,
-                        'type': 'TableCell',
-                        'properties': {
-                            'id': cell_node_id,  # 添加id属性用于关系匹配
-                            'table_id': table_id,
-                            'row_id': header_row_node['id'],
-                            'cell_type': 'header',
-                            'row_index': 0,
-                            'col_index': col_index,
-                            'content': header,
-                            'document_id': document_id,
-                            'created_time': datetime.now().isoformat()
-                        }
-                    }
-                    graph_structure['table_cell_nodes'].append(cell_node)
-                    
-                    # 建立行与单元格的关系
-                    graph_structure['table_relationships'].append({
-                        'source_id': header_row_node['id'],
-                        'target_id': cell_node['id'],
-                        'relationship_type': 'HAS_CELL',
-                        'properties': {
-                            'col_index': col_index,
-                            'document_id': document_id,
-                            'created_time': datetime.now().isoformat()
-                        }
-                    })
-            
-            # 创建数据行节点
-            for row_index, row_data in enumerate(rows):
-                if not isinstance(row_data, list):
-                    continue
-                    
-                data_row_node_id = f"{table_id}_data_row_{row_index}"
-                data_row_node = {
-                    'id': data_row_node_id,
-                    'type': 'TableRow',
-                    'properties': {
-                        'id': data_row_node_id,  # 添加id属性用于关系匹配
-                        'table_id': table_id,
-                        'row_type': 'data',
-                        'row_index': row_index + 1,  # +1 because header is index 0
-                        'cell_count': len(row_data),
-                        'content': ' | '.join(str(cell) for cell in row_data),
-                        'document_id': document_id,
-                        'created_time': datetime.now().isoformat()
-                    }
-                }
-                graph_structure['table_row_nodes'].append(data_row_node)
-                
-                # 建立表格与行的关系
-                graph_structure['table_relationships'].append({
-                    'source_id': table_id,
-                    'target_id': data_row_node['id'],
-                    'relationship_type': 'HAS_ROW',
-                    'properties': {
-                        'row_index': row_index + 1,
-                        'row_type': 'data',
-                        'document_id': document_id,
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-                
-                # 为数据行创建单元格节点
-                for col_index, cell_content in enumerate(row_data):
-                    data_cell_node_id = f"{table_id}_data_cell_{row_index}_{col_index}"
-                    cell_node = {
-                        'id': data_cell_node_id,
-                        'type': 'TableCell',
-                        'properties': {
-                            'id': data_cell_node_id,  # 添加id属性用于关系匹配
-                            'table_id': table_id,
-                            'row_id': data_row_node['id'],
-                            'cell_type': 'data',
-                            'row_index': row_index + 1,
-                            'col_index': col_index,
-                            'content': str(cell_content),
-                            'document_id': document_id,
-                            'created_time': datetime.now().isoformat()
-                        }
-                    }
-                    graph_structure['table_cell_nodes'].append(cell_node)
-                    
-                    # 建立行与单元格的关系
-                    graph_structure['table_relationships'].append({
-                        'source_id': data_row_node['id'],
-                        'target_id': cell_node['id'],
-                        'relationship_type': 'HAS_CELL',
-                        'properties': {
-                            'col_index': col_index,
-                            'document_id': document_id,
-                            'created_time': datetime.now().isoformat()
-                        }
-                    })
-                    
-                    # 建立同行单元格之间的SAME_ROW_AS关系
-                    if col_index > 0:
-                        prev_cell_id = f"{table_id}_data_cell_{row_index}_{col_index-1}"
-                        graph_structure['table_relationships'].append({
-                            'source_id': prev_cell_id,
-                            'target_id': data_cell_node_id,
-                            'relationship_type': 'SAME_ROW_AS',
-                            'properties': {
-                                'row_index': row_index + 1,
-                                'document_id': document_id,
-                                'created_time': datetime.now().isoformat()
-                            }
-                        })
-                        
-        except Exception as e:
-            self.logger.error(f"创建表格结构失败: {str(e)}")
-    
-    def _build_section_sequence_chain(self, section_nodes: List[Dict[str, Any]], section_relationships: List[Dict[str, Any]], document_id: int) -> None:
-        """建立Section之间的顺序关系（NEXT链）"""
-        try:
-            # 按页码和文档内顺序排序
-            sorted_sections = sorted(section_nodes, key=lambda x: (
-                x['properties']['page_number'], 
-                x['properties']['order_in_document']
-            ))
-            
-            # 建立相邻Section的NEXT关系
-            for i in range(len(sorted_sections) - 1):
-                current_section = sorted_sections[i]
-                next_section = sorted_sections[i + 1]
-                
-                section_relationships.append({
-                    'source_id': current_section['id'],
-                    'target_id': next_section['id'],
-                    'relationship_type': 'NEXT',
-                    'properties': {
-                        'sequence_order': i,
-                        'document_id': document_id,
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-                
-        except Exception as e:
-            self.logger.error(f"构建Section顺序链失败: {str(e)}")
-    
-    def _build_content_sequence_chain(self, all_content_nodes: List[Dict[str, Any]], sequence_relationships: List[Dict[str, Any]], document_id: int) -> None:
-        """建立所有内容节点的顺序链（保证原文复原）"""
-        try:
-            # 按页码和节点类型排序，确保阅读顺序
-            sorted_content = sorted(all_content_nodes, key=lambda x: (
-                x['properties']['page_number'],
-                x['properties'].get('section_id', ''),  # 同section内的内容保持一起
-                x['type']  # Paragraph, Table, Figure的类型顺序
-            ))
-            
-            # 建立相邻内容节点的NEXT关系
-            for i in range(len(sorted_content) - 1):
-                current_content = sorted_content[i]
-                next_content = sorted_content[i + 1]
-                
-                sequence_relationships.append({
-                    'source_id': current_content['id'],
-                    'target_id': next_content['id'],
-                    'relationship_type': 'NEXT',
-                    'properties': {
-                        'sequence_order': i,
-                        'content_type_from': current_content['type'],
-                        'content_type_to': next_content['type'],
-                        'document_id': document_id,
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-                
-        except Exception as e:
-            self.logger.error(f"构建内容顺序链失败: {str(e)}")
-    
-    def _extract_semantic_entities_from_section(self, section_node: Dict[str, Any], unit: Dict[str, Any], document_id: int) -> List[Dict[str, Any]]:
-        """从Section中提取语义实体"""
-        try:
-            title = section_node['properties']['title']
-            content = unit.get('content', '')
-            section_id = section_node['id']
-            
-            entities = []
-            
-            # 从标题中提取关键概念
-            if title:
-                title_concepts = self._extract_concepts(title)
-                for concept in title_concepts:
-                    entity_id = f"entity_{document_id}_{len(entities)}"
-                    entities.append({
-                        'id': entity_id,
-                        'type': 'TitleConcept',
-                        'properties': {
-                            'id': entity_id,  # 添加id属性用于关系匹配
-                            'name': concept,
-                            'entity_type': 'title_concept',
-                            'source_section_id': section_id,
-                            'document_id': document_id,
-                            'context': title,
-                            'created_time': datetime.now().isoformat()
-                        }
-                    })
-            
-            # 从内容中提取关键概念
-            content_concepts = self._extract_concepts(content)
-            for concept in content_concepts:
-                entity_id = f"entity_{document_id}_{len(entities)}"
-                entities.append({
-                    'id': entity_id,
-                    'type': 'ContentConcept',
-                    'properties': {
-                        'id': entity_id,  # 添加id属性用于关系匹配
-                        'name': concept,
-                        'entity_type': 'content_concept',
-                        'source_section_id': section_id,
-                        'document_id': document_id,
-                        'context': content[:200],
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-            
-            # 提取产品和技术名称
-            products = self._extract_products_and_technologies(content)
-            for product in products:
-                entity_id = f"entity_{document_id}_{len(entities)}"
-                entities.append({
-                    'id': entity_id,
-                    'type': 'Product',
-                    'properties': {
-                        'id': entity_id,  # 添加id属性用于关系匹配
-                        'name': product,
-                        'entity_type': 'product',
-                        'source_section_id': section_id,
-                        'document_id': document_id,
-                        'context': content[:200],
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-            
-            # 提取技术规格
-            specifications = self._extract_specifications(content)
-            for spec in specifications:
-                entity_id = f"entity_{document_id}_{len(entities)}"
-                entities.append({
-                    'id': entity_id,
-                    'type': 'Specification',
-                    'properties': {
-                        'id': entity_id,  # 添加id属性用于关系匹配
-                        'name': spec['name'],
-                        'value': spec['value'],
-                        'entity_type': 'specification',
-                        'source_section_id': section_id,
-                        'document_id': document_id,
-                        'context': content[:200],
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-            
-            return entities
-            
-        except Exception as e:
-            self.logger.error(f"从Section提取语义实体失败: {str(e)}")
-            return []
-    
-    def _build_entity_relationships_from_sections(self, entities: List[Dict[str, Any]], document_id: int) -> List[Dict[str, Any]]:
-        """构建基于Section的实体关系"""
-        try:
-            relationships = []
-            
-            # 按源Section分组实体
-            section_entities = {}
-            for entity in entities:
-                source_section_id = entity['properties']['source_section_id']
-                if source_section_id not in section_entities:
-                    section_entities[source_section_id] = []
-                section_entities[source_section_id].append(entity)
-            
-            # 在同一Section内建立实体关系
-            for section_id, section_entity_list in section_entities.items():
-                for i, entity1 in enumerate(section_entity_list):
-                    for j, entity2 in enumerate(section_entity_list):
-                        if i >= j:
-                            continue
-                        
-                        rel_type = self._determine_entity_relationship_type(entity1, entity2)
-                        if rel_type:
-                            relationships.append({
-                                'source_id': entity1['id'],
-                                'target_id': entity2['id'],
-                                'relationship_type': rel_type,
-                                'properties': {
-                                    'confidence': 0.8,
-                                    'document_id': document_id,
-                                    'relationship_basis': 'same_section_co_occurrence',
-                                    'source_section_id': section_id,
-                                    'created_time': datetime.now().isoformat()
-                                }
-                            })
-            
-            return relationships
-            
-        except Exception as e:
-            self.logger.error(f"构建Section实体关系失败: {str(e)}")
-            return []
-    
-    def _parse_pdf_json_to_graph_structure(self, pdf_data: Dict[str, Any], document_id: int) -> Dict[str, Any]:
-        """
-        解析PDF JSON数据，构建图谱结构
-        重点关注标题-内容的层级关系，确保GraphRAG查询的完整性
-        
-        Args:
-            pdf_data: PDF提取的JSON数据
-            document_id: 文档ID
-            
-        Returns:
-            Dict[str, Any]: 图谱结构数据
-        """
-        try:
-            elements = pdf_data.get('elements', [])
-            
-            # 存储图谱结构
-            graph_structure = {
-                'document_node': None,
-                'title_nodes': [],
-                'content_nodes': [],
-                'title_content_relationships': [],
-                'content_hierarchy_relationships': [],
-                'semantic_entities': [],
-                'entity_relationships': []
-            }
-            
-            # 创建文档根节点
-            doc_info = pdf_data.get('document_info', {})
-            graph_structure['document_node'] = {
-                'id': f"doc_{document_id}",
-                'type': 'Document',
-                'properties': {
-                    'document_id': document_id,
-                    'filename': doc_info.get('filename', ''),
-                    'source_file': doc_info.get('source_file', ''),
-                    'total_elements': doc_info.get('total_elements', 0),
-                    'extraction_time': doc_info.get('extraction_time', ''),
-                    'created_time': datetime.now().isoformat()
-                }
-            }
-            
-            # 解析标题和内容的层级结构
-            current_title_stack = []  # 标题栈，支持多级标题
-            
-            for element in elements:
-                element_type = element.get('type', '').lower()
-                element_category = element.get('category', '').lower()
-                text = element.get('text', '').strip()
-                element_id = element.get('id', '')
-                
-                if not text:
-                    continue
-                
-                # 处理标题节点
-                if element_type == 'title' or element_category == 'title':
-                    title_node = self._create_title_node(element, document_id)
-                    if title_node:
-                        graph_structure['title_nodes'].append(title_node)
-                        
-                        # 管理标题层级栈
-                        title_level = element.get('metadata', {}).get('title_level', 1)
-                        self._update_title_stack(current_title_stack, title_node, title_level)
-                        
-                        # 创建标题层级关系
-                        if len(current_title_stack) > 1:
-                            parent_title = current_title_stack[-2]
-                            child_title = current_title_stack[-1]
-                            graph_structure['content_hierarchy_relationships'].append({
-                                'parent_id': parent_title['id'],
-                                'child_id': child_title['id'],
-                                'relationship_type': 'HAS_SUBTITLE',
-                                'properties': {
-                                    'hierarchy_level': title_level,
-                                    'document_id': document_id
-                                }
-                            })
-                
-                # 处理内容节点
-                elif element_type in ['narrativetext', 'text', 'table', 'image', 'figure'] or \
-                     element_category in ['narrativetext', 'text', 'table', 'image', 'figure']:
-                    
-                    content_node = self._create_content_node(element, document_id)
-                    if content_node:
-                        graph_structure['content_nodes'].append(content_node)
-                        
-                        # 建立内容与标题的关系
-                        parent_title = self._find_parent_title(element, current_title_stack)
-                        if parent_title:
-                            graph_structure['title_content_relationships'].append({
-                                'title_id': parent_title['id'],
-                                'content_id': content_node['id'],
-                                'relationship_type': 'HAS_CONTENT',
-                                'properties': {
-                                    'content_type': content_node['properties']['content_type'],
-                                    'page_number': content_node['properties']['page_number'],
-                                    'document_id': document_id
-                                }
-                            })
-                        else:
-                            # 独立内容直接连接到文档节点
-                            graph_structure['title_content_relationships'].append({
-                                'title_id': graph_structure['document_node']['id'],
-                                'content_id': content_node['id'],
-                                'relationship_type': 'HAS_CONTENT',
-                                'properties': {
-                                    'content_type': content_node['properties']['content_type'],
-                                    'page_number': content_node['properties']['page_number'],
-                                    'document_id': document_id,
-                                    'is_standalone': True
-                                }
-                            })
-                        
-                        # 提取语义实体
-                        semantic_entities = self._extract_semantic_entities_from_content(content_node, document_id)
-                        graph_structure['semantic_entities'].extend(semantic_entities)
-            
-            # 建立语义实体之间的关系
-            entity_relationships = self._build_entity_relationships(graph_structure['semantic_entities'], document_id)
-            graph_structure['entity_relationships'].extend(entity_relationships)
-            
-            # 建立标题与语义实体的关系
-            title_entity_relationships = self._build_title_entity_relationships(
-                graph_structure['title_nodes'], 
-                graph_structure['semantic_entities'], 
-                document_id
-            )
-            graph_structure['entity_relationships'].extend(title_entity_relationships)
-            
-            self.logger.info(f"PDF图谱结构解析完成，文档ID: {document_id}")
-            return graph_structure
-            
-        except Exception as e:
-            self.logger.error(f"解析PDF图谱结构失败: {str(e)}")
-            return {}
-    
-    def _create_title_node(self, element: Dict[str, Any], document_id: int) -> Optional[Dict[str, Any]]:
-        """创建标题节点"""
-        try:
-            element_id = element.get('id', '')
-            text = element.get('text', '').strip()
-            metadata = element.get('metadata', {})
-            
-            if not text:
-                return None
-            
-            title_node = {
-                'id': f"title_{element_id}",
-                'type': 'Title',
-                'properties': {
-                    'text': text,
-                    'original_element_id': element_id,
-                    'document_id': document_id,
-                    'page_number': metadata.get('page_number', 1),
-                    'title_level': metadata.get('title_level', 1),
-                    'hierarchy_depth': metadata.get('hierarchy_depth', 1),
-                    'detection_class_prob': metadata.get('detection_class_prob', 0.0),
-                    'coordinates': json.dumps(metadata.get('coordinates', {}), ensure_ascii=False),
-                    'created_time': datetime.now().isoformat()
-                }
-            }
-            
-            return title_node
-            
-        except Exception as e:
-            self.logger.error(f"创建标题节点失败: {str(e)}")
-            return None
-    
-    def _create_content_node(self, element: Dict[str, Any], document_id: int) -> Optional[Dict[str, Any]]:
-        """创建内容节点"""
-        try:
-            element_id = element.get('id', '')
-            text = element.get('text', '').strip()
-            element_type = element.get('type', '').lower()
-            element_category = element.get('category', '').lower()
-            metadata = element.get('metadata', {})
-            
-            if not text:
-                return None
-            
-            # 确定内容类型
-            content_type = element_type if element_type in ['table', 'image', 'figure'] else 'text'
-            
-            content_node = {
-                'id': f"content_{element_id}",
-                'type': 'Content',
-                'properties': {
-                    'text': text,
-                    'content_type': content_type,
-                    'original_element_id': element_id,
-                    'document_id': document_id,
-                    'page_number': metadata.get('page_number', 1),
-                    'detection_class_prob': metadata.get('detection_class_prob', 0.0),
-                    'coordinates': json.dumps(metadata.get('coordinates', {}), ensure_ascii=False),
-                    'belongs_to_titles': json.dumps(metadata.get('belongs_to_titles', []), ensure_ascii=False),
-                    'created_time': datetime.now().isoformat()
-                }
-            }
-            
-            return content_node
-            
-        except Exception as e:
-            self.logger.error(f"创建内容节点失败: {str(e)}")
-            return None
-    
-    def _update_title_stack(self, title_stack: List[Dict[str, Any]], new_title: Dict[str, Any], title_level: int) -> None:
-        """更新标题层级栈"""
-        try:
-            # 移除比当前标题级别更深的标题
-            while title_stack and title_stack[-1]['properties']['title_level'] >= title_level:
-                title_stack.pop()
-            
-            # 添加新标题
-            title_stack.append(new_title)
-            
-        except Exception as e:
-            self.logger.error(f"更新标题栈失败: {str(e)}")
-    
-    def _find_parent_title(self, element: Dict[str, Any], title_stack: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """找到内容元素的父标题"""
-        try:
-            # 首先检查belongs_to_titles字段
-            belongs_to_titles = element.get('metadata', {}).get('belongs_to_titles', [])
-            if belongs_to_titles:
-                target_title_id = belongs_to_titles[0].get('id')
-                for title in title_stack:
-                    if title['properties']['original_element_id'] == target_title_id:
-                        return title
-            
-            # 如果没有明确关联，返回栈顶标题（最近的标题）
-            return title_stack[-1] if title_stack else None
-            
-        except Exception as e:
-            self.logger.error(f"查找父标题失败: {str(e)}")
-            return None
-    
-    def _extract_semantic_entities_from_content(self, content_node: Dict[str, Any], document_id: int) -> List[Dict[str, Any]]:
-        """从内容中提取语义实体"""
-        try:
-            text = content_node['properties']['text']
-            content_id = content_node['id']
-            
-            entities = []
-            
-            # 提取关键概念和术语
-            concepts = self._extract_concepts(text)
-            for concept in concepts:
-                entities.append({
-                    'id': f"entity_{document_id}_{len(entities)}",
-                    'type': 'Concept',
-                    'properties': {
-                        'name': concept,
-                        'entity_type': 'concept',
-                        'source_content_id': content_id,
-                        'document_id': document_id,
-                        'context': text[:200],  # 保存上下文
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-            
-            # 提取产品和技术名称
-            products = self._extract_products_and_technologies(text)
-            for product in products:
-                entities.append({
-                    'id': f"entity_{document_id}_{len(entities)}",
-                    'type': 'Product',
-                    'properties': {
-                        'name': product,
-                        'entity_type': 'product',
-                        'source_content_id': content_id,
-                        'document_id': document_id,
-                        'context': text[:200],
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-            
-            # 提取数值和规格
-            specifications = self._extract_specifications(text)
-            for spec in specifications:
-                entities.append({
-                    'id': f"entity_{document_id}_{len(entities)}",
-                    'type': 'Specification',
-                    'properties': {
-                        'name': spec['name'],
-                        'value': spec['value'],
-                        'entity_type': 'specification',
-                        'source_content_id': content_id,
-                        'document_id': document_id,
-                        'context': text[:200],
-                        'created_time': datetime.now().isoformat()
-                    }
-                })
-            
-            return entities
-            
-        except Exception as e:
-            self.logger.error(f"提取语义实体失败: {str(e)}")
-            return []
-    
-    def _extract_concepts(self, text: str) -> List[str]:
-        """提取关键概念"""
-        try:
-            concepts = []
-            
-            # 生物技术相关概念模式
-            bio_patterns = [
-                r'[A-Z]{2,5}[-\s]*\d*\s*(?:细胞|蛋白|试剂|检测|分析)',
-                r'(?:宿主|残留|检测|试剂盒|表达系统|过程开发)',
-                r'[A-Z]{3,}(?:[-\s]*\w+)*(?=\s|$)',  # 英文缩写
-                r'[\u4e00-\u9fff]{2,6}(?:检测|试剂|方法|技术|系统)',
-            ]
-            
-            for pattern in bio_patterns:
-                matches = re.findall(pattern, text, re.IGNORECASE)
-                concepts.extend([match.strip() for match in matches if len(match.strip()) > 1])
-            
-            # 去重并过滤
-            unique_concepts = list(set(concepts))
-            return [concept for concept in unique_concepts if len(concept) > 2 and len(concept) < 50]
-            
-        except Exception as e:
-            self.logger.error(f"提取概念失败: {str(e)}")
-            return []
-    
-    def _extract_products_and_technologies(self, text: str) -> List[str]:
-        """提取产品和技术名称"""
-        try:
-            products = []
-            
-            # 产品模式
-            product_patterns = [
-                r'CHO[-\s]*K\d+\s*(?:细胞|表达系统)',
-                r'[\u4e00-\u9fff]{2,8}(?:试剂盒|检测盒)',
-                r'[A-Z]+[-\s]*\d*\s*(?:试剂|检测)',
-                r'(?:多宁|DIONING)[\u4e00-\u9fff\w\s]*'
-            ]
-            
-            for pattern in product_patterns:
-                matches = re.findall(pattern, text, re.IGNORECASE)
-                products.extend([match.strip() for match in matches])
-            
-            return list(set([product for product in products if len(product) > 2]))
-            
-        except Exception as e:
-            self.logger.error(f"提取产品失败: {str(e)}")
-            return []
-    
-    def _extract_specifications(self, text: str) -> List[Dict[str, str]]:
-        """提取技术规格和数值"""
-        try:
-            specifications = []
-            
-            # 数值模式
-            spec_patterns = [
-                r'(\d+(?:\.\d+)?)\s*%\s*以上',
-                r'(\d+(?:\.\d+)?)\s*(?:mg|μg|ng|ml|μl)',
-                r'(\d+(?:\.\d+)?)\s*(?:度|温度|℃)',
-                r'(\d+(?:\.\d+)?)\s*(?:小时|分钟|秒)',
-                r'pH\s*(\d+(?:\.\d+)?)',
-                r'(\d+(?:\.\d+)?)\s*(?:倍|次|fold)'
-            ]
-            
-            for pattern in spec_patterns:
-                matches = re.finditer(pattern, text, re.IGNORECASE)
-                for match in matches:
-                    full_match = match.group(0)
-                    value = match.group(1)
-                    specifications.append({
-                        'name': full_match,
-                        'value': value
-                    })
-            
-            return specifications
-            
-        except Exception as e:
-            self.logger.error(f"提取规格失败: {str(e)}")
-            return []
-    
-    def _build_entity_relationships(self, entities: List[Dict[str, Any]], document_id: int) -> List[Dict[str, Any]]:
-        """构建实体间关系"""
-        try:
-            relationships = []
-            
-            # 基于实体类型和共现构建关系
-            for i, entity1 in enumerate(entities):
-                for j, entity2 in enumerate(entities):
-                    if i >= j:
-                        continue
-                    
-                    # 检查是否来自同一内容源
-                    if entity1['properties']['source_content_id'] == entity2['properties']['source_content_id']:
-                        rel_type = self._determine_entity_relationship_type(entity1, entity2)
-                        if rel_type:
-                            relationships.append({
-                                'source_id': entity1['id'],
-                                'target_id': entity2['id'],
-                                'relationship_type': rel_type,
-                                'properties': {
-                                    'confidence': 0.8,  # 共现关系置信度
-                                    'document_id': document_id,
-                                    'relationship_basis': 'co_occurrence',
-                                    'created_time': datetime.now().isoformat()
-                                }
-                            })
-            
-            return relationships
-            
-        except Exception as e:
-            self.logger.error(f"构建实体关系失败: {str(e)}")
-            return []
-    
-    def _determine_entity_relationship_type(self, entity1: Dict[str, Any], entity2: Dict[str, Any]) -> Optional[str]:
-        """确定实体间关系类型"""
-        try:
-            type1 = entity1['properties']['entity_type']
-            type2 = entity2['properties']['entity_type']
-            
-            # 定义关系类型映射
-            relationship_map = {
-                ('product', 'concept'): 'USES_CONCEPT',
-                ('product', 'specification'): 'HAS_SPECIFICATION',
-                ('concept', 'specification'): 'MEASURED_BY',
-                ('concept', 'concept'): 'RELATED_TO',
-                ('product', 'product'): 'RELATED_TO'
-            }
-            
-            # 确保关系的一致性（按字母顺序）
-            key = tuple(sorted([type1, type2]))
-            return relationship_map.get(key, 'RELATED_TO')
-            
-        except Exception as e:
-            self.logger.error(f"确定实体关系类型失败: {str(e)}")
-            return None
-    
-    def _build_title_entity_relationships(self, title_nodes: List[Dict[str, Any]], entities: List[Dict[str, Any]], document_id: int) -> List[Dict[str, Any]]:
-        """构建标题与实体的关系"""
-        try:
-            relationships = []
-            
-            for entity in entities:
-                source_content_id = entity['properties']['source_content_id']
-                
-                # 找到包含此内容的标题
-                for title in title_nodes:
-                    title_id = title['id']
-                    # 这里可以通过内容归属关系来判断
-                    # 简化处理：假设同一文档下的实体都与标题相关
-                    relationships.append({
-                        'source_id': title_id,
-                        'target_id': entity['id'],
-                        'relationship_type': 'MENTIONS',
-                        'properties': {
-                            'confidence': 0.7,
-                            'document_id': document_id,
-                            'created_time': datetime.now().isoformat()
-                        }
-                    })
-                    break  # 只关联最相关的一个标题
-            
-            return relationships
-            
-        except Exception as e:
-            self.logger.error(f"构建标题实体关系失败: {str(e)}")
-            return []
-    
-    def _create_graph_nodes(self, graph_structure: Dict[str, Any], document_id: int) -> int:
-        """在Neo4j中创建图谱节点"""
-        try:
-            nodes_created = 0
-            
-            # 创建文档节点
-            if graph_structure['document_node']:
-                node = graph_structure['document_node']
-                success = self.neo4j_manager.create_node(node['type'], node['properties'])
-                if success:
-                    nodes_created += 1
-            
-            # 创建新结构的节点
-            # 创建Section节点
-            if 'section_nodes' in graph_structure:
-                for section_node in graph_structure['section_nodes']:
-                    success = self.neo4j_manager.create_node(section_node['type'], section_node['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            # 创建Paragraph节点
-            if 'paragraph_nodes' in graph_structure:
-                for paragraph_node in graph_structure['paragraph_nodes']:
-                    success = self.neo4j_manager.create_node(paragraph_node['type'], paragraph_node['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            # 创建Figure节点
-            if 'figure_nodes' in graph_structure:
-                for figure_node in graph_structure['figure_nodes']:
-                    success = self.neo4j_manager.create_node(figure_node['type'], figure_node['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            # 创建Table节点
-            if 'table_nodes' in graph_structure:
-                for table_node in graph_structure['table_nodes']:
-                    success = self.neo4j_manager.create_node(table_node['type'], table_node['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            # 创建TableRow节点
-            if 'table_row_nodes' in graph_structure:
-                for row_node in graph_structure['table_row_nodes']:
-                    success = self.neo4j_manager.create_node(row_node['type'], row_node['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            # 创建TableCell节点
-            if 'table_cell_nodes' in graph_structure:
-                for cell_node in graph_structure['table_cell_nodes']:
-                    success = self.neo4j_manager.create_node(cell_node['type'], cell_node['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            # 兼容性支持：创建旧格式的节点
-            # 创建内容单元节点（content_units格式）
-            if 'content_unit_nodes' in graph_structure:
-                for content_unit_node in graph_structure['content_unit_nodes']:
-                    success = self.neo4j_manager.create_node(content_unit_node['type'], content_unit_node['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            # 创建内容元素节点（表格、图片等）
-            if 'content_element_nodes' in graph_structure:
-                for element_node in graph_structure['content_element_nodes']:
-                    success = self.neo4j_manager.create_node(element_node['type'], element_node['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            # 创建标题节点
-            if 'title_nodes' in graph_structure:
-                for title_node in graph_structure['title_nodes']:
-                    success = self.neo4j_manager.create_node(title_node['type'], title_node['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            # 创建内容节点（兼容原有格式）
-            if 'content_nodes' in graph_structure:
-                for content_node in graph_structure['content_nodes']:
-                    success = self.neo4j_manager.create_node(content_node['type'], content_node['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            # 创建语义实体节点
-            if 'semantic_entities' in graph_structure:
-                for entity in graph_structure['semantic_entities']:
-                    success = self.neo4j_manager.create_node(entity['type'], entity['properties'])
-                    if success:
-                        nodes_created += 1
-            
-            return nodes_created
-            
-        except Exception as e:
-            self.logger.error(f"创建图谱节点失败: {str(e)}")
-            return 0
-    
-    def _create_graph_relationships(self, graph_structure: Dict[str, Any], document_id: int) -> int:
-        """在Neo4j中创建图谱关系"""
-        try:
-            relationships_created = 0
-            
-            # 创建新结构的关系
-            # 创建Section之间的关系
-            if 'section_relationships' in graph_structure:
-                for rel in graph_structure['section_relationships']:
-                    success = self._create_relationship_by_property(
-                        rel['source_id'], 
-                        rel['target_id'], 
-                        rel['relationship_type'], 
-                        rel['properties']
-                    )
-                    if success:
-                        relationships_created += 1
-            
-            # 创建HAS_CONTENT关系（Section -> Paragraph/Figure/Table）
-            if 'content_relationships' in graph_structure:
-                for rel in graph_structure['content_relationships']:
-                    success = self._create_relationship_by_property(
-                        rel['source_id'], 
-                        rel['target_id'], 
-                        rel['relationship_type'], 
-                        rel['properties']
-                    )
-                    if success:
-                        relationships_created += 1
-            
-            # 创建NEXT顺序关系
-            if 'sequence_relationships' in graph_structure:
-                for rel in graph_structure['sequence_relationships']:
-                    success = self._create_relationship_by_property(
-                        rel['source_id'], 
-                        rel['target_id'], 
-                        rel['relationship_type'], 
-                        rel['properties']
-                    )
-                    if success:
-                        relationships_created += 1
-            
-            # 创建ILLUSTRATES关系（Figure -> Paragraph）
-            if 'illustration_relationships' in graph_structure:
-                for rel in graph_structure['illustration_relationships']:
-                    success = self._create_relationship_by_property(
-                        rel['source_id'], 
-                        rel['target_id'], 
-                        rel['relationship_type'], 
-                        rel['properties']
-                    )
-                    if success:
-                        relationships_created += 1
-            
-            # 创建表格内部关系（HAS_ROW, HAS_CELL, SAME_ROW_AS）
-            if 'table_relationships' in graph_structure:
-                for rel in graph_structure['table_relationships']:
-                    success = self._create_relationship_by_property(
-                        rel['source_id'], 
-                        rel['target_id'], 
-                        rel['relationship_type'], 
-                        rel['properties']
-                    )
-                    if success:
-                        relationships_created += 1
-            
-            # 兼容性支持：创建旧格式的关系
-            # 创建内容单元关系（content_units格式）
-            if 'unit_relationships' in graph_structure:
-                for rel in graph_structure['unit_relationships']:
-                    success = self._create_relationship_by_property(
-                        rel['source_id'], 
-                        rel['target_id'], 
-                        rel['relationship_type'], 
-                        rel['properties']
-                    )
-                    if success:
-                        relationships_created += 1
-            
-            # 创建元素关系（表格、图片等）
-            if 'element_relationships' in graph_structure:
-                for rel in graph_structure['element_relationships']:
-                    success = self._create_relationship_by_property(
-                        rel['source_id'], 
-                        rel['target_id'], 
-                        rel['relationship_type'], 
-                        rel['properties']
-                    )
-                    if success:
-                        relationships_created += 1
-            
-            # 创建标题-内容关系（兼容原有格式）
-            if 'title_content_relationships' in graph_structure:
-                for rel in graph_structure['title_content_relationships']:
-                    success = self._create_relationship_by_property(
-                        rel['title_id'], 
-                        rel['content_id'], 
-                        rel['relationship_type'], 
-                        rel['properties']
-                    )
-                    if success:
-                        relationships_created += 1
-            
-            # 创建内容层级关系（兼容原有格式）
-            if 'content_hierarchy_relationships' in graph_structure:
-                for rel in graph_structure['content_hierarchy_relationships']:
-                    success = self._create_relationship_by_property(
-                        rel['parent_id'], 
-                        rel['child_id'], 
-                        rel['relationship_type'], 
-                        rel['properties']
-                    )
-                    if success:
-                        relationships_created += 1
-            
-            # 创建实体关系
-            if 'entity_relationships' in graph_structure:
-                for rel in graph_structure['entity_relationships']:
-                    success = self._create_relationship_by_property(
-                        rel['source_id'], 
-                        rel['target_id'], 
-                        rel['relationship_type'], 
-                        rel['properties']
-                    )
-                    if success:
-                        relationships_created += 1
-            
-            return relationships_created
-            
-        except Exception as e:
-            self.logger.error(f"创建图谱关系失败: {str(e)}")
-            return 0
-    
-    def _create_relationship_by_property(self, source_id: str, target_id: str, rel_type: str, properties: Dict[str, Any]) -> bool:
-        """通过属性匹配创建关系"""
-        try:
-            # 构建Cypher查询，通过节点的id属性匹配
-            query = """
-            MATCH (source), (target)
-            WHERE source.id = $source_id AND target.id = $target_id
-            CREATE (source)-[r:%s]->(target)
-            SET r = $properties
-            RETURN r
-            """ % rel_type
-            
-            parameters = {
+            source_id = mention.get('elem_id', '')
+            target_id = mention.get('entity_uid', '')
+            
+            # MySQL数据
+            relation_data = {
+                'document_id': document_id,
                 'source_id': source_id,
                 'target_id': target_id,
-                'properties': properties
+                'relation_type': 'MENTIONS'
             }
+            mysql_success = self.mysql_manager.insert_data('graph_relations', relation_data)
             
-            result = self.neo4j_manager.execute_query(query, parameters)
-            return len(result) > 0
+            # Neo4j数据
+            try:
+                # 查找源节点（Block）
+                source_nodes = self.neo4j_manager.find_nodes('Block', {'elem_id': source_id, 'document_id': document_id})
+                # 查找目标节点（Entity）
+                entity_type = mention.get('entity_type', '')
+                target_label = entity_type if entity_type else 'Entity'
+                target_nodes = self.neo4j_manager.find_nodes(target_label, {'entity_uid': target_id, 'document_id': document_id})
+                
+                if source_nodes and target_nodes:
+                    source_node_id = source_nodes[0]['node_id']
+                    target_node_id = target_nodes[0]['node_id']
+                    
+                    relation_properties = {
+                        'document_id': document_id,
+                        'created_at': datetime.now().isoformat()
+                    }
+                    
+                    neo4j_success = self.neo4j_manager.create_relationship(
+                        source_node_id, target_node_id, 'MENTIONS', relation_properties
+                    )
+                    self.logger.debug(f"Neo4j MENTIONS关系创建: {neo4j_success}")
+                else:
+                    self.logger.warning(f"Neo4j MENTIONS关系创建失败: 找不到源节点或目标节点")
+            except Exception as e:
+                self.logger.warning(f"Neo4j MENTIONS关系创建失败: {e}")
+            
+            return mysql_success
             
         except Exception as e:
-            self.logger.error(f"创建关系失败: {str(e)}")
+            self.logger.error(f"创建MENTIONS关系失败: {e}")
             return False
-    
 
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-    def process_content_units_to_graph(self, content_units_file_path: str, document_id: int) -> Dict[str, Any]:
-        """
-        便捷方法：直接处理content_units.json文件构建知识图谱
-        推荐使用此方法，因为content_units.json数据结构更适合GraphRAG查询
-        
-        Args:
-            content_units_file_path: content_units.json文件路径
-            document_id: 文档ID
-            
-        Returns:
-            Dict[str, Any]: 处理结果
-        """
+    def _create_has_entity_relation(self, section_id, mention, document_id):
+        """创建HAS_ENTITY关系 - 双写到MySQL和Neo4j"""
         try:
-            self.logger.info(f"开始处理content_units.json文件构建知识图谱，文档ID: {document_id}")
-            return self.process_pdf_json_to_graph(content_units_file_path, document_id)
+            target_id = mention.get('entity_uid', '')
+            
+            # MySQL数据
+            relation_data = {
+                'document_id': document_id,
+                'source_id': section_id,
+                'target_id': target_id,
+                'relation_type': 'HAS_ENTITY'
+            }
+            mysql_success = self.mysql_manager.insert_data('graph_relations', relation_data)
+            
+            # Neo4j数据
+            try:
+                # 查找源节点（Section）
+                source_nodes = self.neo4j_manager.find_nodes('Section', {'section_id': section_id, 'document_id': document_id})
+                # 查找目标节点（Entity）
+                entity_type = mention.get('entity_type', '')
+                target_label = entity_type if entity_type else 'Entity'
+                target_nodes = self.neo4j_manager.find_nodes(target_label, {'entity_uid': target_id, 'document_id': document_id})
+                
+                if source_nodes and target_nodes:
+                    source_node_id = source_nodes[0]['node_id']
+                    target_node_id = target_nodes[0]['node_id']
+                    
+                    relation_properties = {
+                        'document_id': document_id,
+                        'created_at': datetime.now().isoformat()
+                    }
+                    
+                    neo4j_success = self.neo4j_manager.create_relationship(
+                        source_node_id, target_node_id, 'HAS_ENTITY', relation_properties
+                    )
+                    self.logger.debug(f"Neo4j HAS_ENTITY关系创建: {neo4j_success}")
+                else:
+                    self.logger.warning(f"Neo4j HAS_ENTITY关系创建失败: 找不到源节点或目标节点")
+            except Exception as e:
+                self.logger.warning(f"Neo4j HAS_ENTITY关系创建失败: {e}")
+            
+            return mysql_success
             
         except Exception as e:
-            self.logger.error(f"处理content_units.json文件失败: {str(e)}")
-            return {
-                'success': False,
-                'message': f'处理content_units.json文件失败: {str(e)}',
-                'nodes_count': 0,
-                'relationships_count': 0
-            }
-    
+            self.logger.error(f"创建HAS_ENTITY关系失败: {e}")
+            return False
+
+    def _create_semantic_relations(self, mentions, document_id):
+        """创建语义关系 - 双写到MySQL和Neo4j"""
+        try:
+            relations_count = 0
+            # 简化实现：在同一section内的Product和Analyte之间创建MEASURES关系
+            sections_mentions = {}
+            for mention in mentions:
+                section_id = mention.get('section_id', '')
+                if section_id not in sections_mentions:
+                    sections_mentions[section_id] = []
+                sections_mentions[section_id].append(mention)
+
+            for section_mentions in sections_mentions.values():
+                products = [m for m in section_mentions if m.get('entity_type') == 'Product']
+                analytes = [m for m in section_mentions if m.get('entity_type') == 'Analyte']
+
+                for product in products:
+                    for analyte in analytes:
+                        source_id = product.get('entity_uid', '')
+                        target_id = analyte.get('entity_uid', '')
+                        
+                        # MySQL数据
+                        relation_data = {
+                            'document_id': document_id,
+                            'source_id': source_id,
+                            'target_id': target_id,
+                            'relation_type': 'MEASURES'
+                        }
+                        mysql_success = self.mysql_manager.insert_data('graph_relations', relation_data)
+                        
+                        if mysql_success:
+                            relations_count += 1
+                            
+                            # Neo4j数据
+                            try:
+                                # 查找源节点（Product）
+                                source_nodes = self.neo4j_manager.find_nodes('Product', {'entity_uid': source_id, 'document_id': document_id})
+                                # 查找目标节点（Analyte）
+                                target_nodes = self.neo4j_manager.find_nodes('Analyte', {'entity_uid': target_id, 'document_id': document_id})
+                                
+                                if source_nodes and target_nodes:
+                                    source_node_id = source_nodes[0]['node_id']
+                                    target_node_id = target_nodes[0]['node_id']
+                                    
+                                    relation_properties = {
+                                        'document_id': document_id,
+                                        'created_at': datetime.now().isoformat()
+                                    }
+                                    
+                                    neo4j_success = self.neo4j_manager.create_relationship(
+                                        source_node_id, target_node_id, 'MEASURES', relation_properties
+                                    )
+                                    self.logger.debug(f"Neo4j MEASURES关系创建: {neo4j_success}")
+                                else:
+                                    self.logger.warning(f"Neo4j MEASURES关系创建失败: 找不到源节点或目标节点")
+                            except Exception as e:
+                                self.logger.warning(f"Neo4j MEASURES关系创建失败: {e}")
+
+            return relations_count
+            
+        except Exception as e:
+            self.logger.error(f"创建语义关系失败: {e}")
+            return 0

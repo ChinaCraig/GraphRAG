@@ -1,8 +1,24 @@
--- GraphRAG数据库初始化脚本 v2.0
+-- GraphRAG数据库初始化脚本 v2.2
 -- 创建GraphRAG系统所需的所有数据库表
--- 数据库连接信息：192.168.16.26:3306, root, !200808Xx
+-- 数据库连接信息：192.168.2.202:3306, root, zhang
 --
 -- 更新日志：
+-- v2.2: 新增GraphRAG专用图谱表和问题修复
+--   - 新增graph_nodes表：GraphRAG专用节点表，支持Section/Block/Entity/Claim等多种节点类型
+--   - 新增graph_relations表：GraphRAG专用关系表，支持MENTIONS/HAS_ENTITY/MEASURES等关系类型
+--   - 修复了中文实体识别的正则表达式边界问题（移除\b单词边界）
+--   - 修复了bbox规范化支持列表格式数据：[[x1,y1],[x2,y2]]
+--   - 修复了figures/tables表重复主键问题：elem_id加section_id前缀确保唯一性
+--   - 修复了table_rows表外键约束问题：确保与tables表主键一致
+--   - node_id字段设置为可空，解决数据插入失败问题
+-- v2.1: 新增PDF结构化数据MySQL存储功能
+--   - 新增sections表：存储PDF章节信息（一节一行）
+--   - 新增figures表：存储PDF图片信息（一图一行，遍历blocks.type='figure'）
+--   - 新增tables表：存储PDF表格信息（一表一行，遍历blocks.type='table'）
+--   - 新增table_rows表：存储PDF表格行数据（一行一行）
+--   - 主键elem_id/section_id与Neo4j、向量库、ES保持一致
+--   - 支持bbox坐标规范化、表格列数推断、行文本格式化
+--   - 优化索引结构，提升PDF结构化数据查询性能
 -- v2.0: 完整支持"一家子"概念的GraphRAG系统
 --   - document_chunks表支持element_id字段，实现内容关联
 --   - content字段改为JSON类型，存储完整的content_units数据
@@ -70,6 +86,84 @@ CREATE TABLE `document_chunks` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文档分块表 - 存储向量化后的内容单元和完整结构化数据';
 
 -- ===========================
+-- PDF结构化数据表（新增）
+-- ===========================
+
+-- sections表（一节一行）
+-- 主键section_id与Neo4j、向量库、ES保持一致
+DROP TABLE IF EXISTS `sections`;
+CREATE TABLE `sections` (
+  `section_id` varchar(100) NOT NULL COMMENT 'section唯一标识符（主键，与Neo4j、向量库、ES一致）',
+  `doc_id` int(11) NOT NULL COMMENT '文档ID（关联documents表）',
+  `version` int(11) NOT NULL DEFAULT 1 COMMENT '版本号',
+  `title` text COMMENT 'section标题',
+  `page_start` int(11) NOT NULL DEFAULT 1 COMMENT '起始页码',
+  `page_end` int(11) NOT NULL DEFAULT 1 COMMENT '结束页码',
+  `created_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`section_id`),
+  KEY `idx_doc_id` (`doc_id`),
+  KEY `idx_version` (`version`),
+  KEY `idx_page_range` (`page_start`, `page_end`),
+  CONSTRAINT `fk_sections_document` FOREIGN KEY (`doc_id`) REFERENCES `documents` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='PDF sections表 - 存储文档章节信息';
+
+-- figures表（一图一行）
+-- 遍历blocks.type='figure'，主键elem_id与Neo4j、向量库、ES一致
+DROP TABLE IF EXISTS `figures`;
+CREATE TABLE `figures` (
+  `elem_id` varchar(100) NOT NULL COMMENT '图片元素唯一标识符（主键，与Neo4j、向量库、ES一致）',
+  `section_id` varchar(100) NOT NULL COMMENT '所属section_id',
+  `image_path` varchar(500) DEFAULT NULL COMMENT '图片路径',
+  `caption` text COMMENT '图片说明文字',
+  `page` int(11) NOT NULL DEFAULT 1 COMMENT '所在页码',
+  `bbox_norm` json DEFAULT NULL COMMENT '规范化边界框坐标（相对坐标）',
+  `bind_to_elem_id` varchar(100) DEFAULT NULL COMMENT '绑定的元素ID（图文绑定关系）',
+  `created_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`elem_id`),
+  KEY `idx_section_id` (`section_id`),
+  KEY `idx_page` (`page`),
+  KEY `idx_bind_to_elem` (`bind_to_elem_id`),
+  CONSTRAINT `fk_figures_section` FOREIGN KEY (`section_id`) REFERENCES `sections` (`section_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='PDF figures表 - 存储文档图片信息';
+
+-- tables表（一表一行）
+-- 遍历blocks.type='table'，主键elem_id与Neo4j、向量库、ES一致
+DROP TABLE IF EXISTS `tables`;
+CREATE TABLE `tables` (
+  `elem_id` varchar(100) NOT NULL COMMENT '表格元素唯一标识符（主键，与Neo4j、向量库、ES一致）',
+  `section_id` varchar(100) NOT NULL COMMENT '所属section_id',
+  `table_html` longtext COMMENT '表格HTML内容',
+  `n_rows` int(11) NOT NULL DEFAULT 0 COMMENT '表格行数',
+  `n_cols` int(11) NOT NULL DEFAULT 0 COMMENT '表格列数（推断/解析）',
+  `created_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`elem_id`),
+  KEY `idx_section_id` (`section_id`),
+  KEY `idx_table_size` (`n_rows`, `n_cols`),
+  CONSTRAINT `fk_tables_section` FOREIGN KEY (`section_id`) REFERENCES `sections` (`section_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='PDF tables表 - 存储文档表格信息';
+
+-- table_rows表（一行一行）
+-- 对每个表格的rows进行存储
+DROP TABLE IF EXISTS `table_rows`;
+CREATE TABLE `table_rows` (
+  `id` int(11) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `table_elem_id` varchar(100) NOT NULL COMMENT '所属表格elem_id',
+  `row_index` int(11) NOT NULL COMMENT '行索引（从0开始）',
+  `row_text` text COMMENT '规范化行文本（格式：项目: 线性范围 | 数值: 1–100 ng/mL | R²: 0.998）',
+  `row_json` json COMMENT '行的原始键值对数据',
+  `created_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_table_row` (`table_elem_id`, `row_index`) COMMENT '表格和行索引的唯一约束',
+  KEY `idx_table_elem_id` (`table_elem_id`),
+  KEY `idx_row_index` (`row_index`),
+  CONSTRAINT `fk_table_rows_table` FOREIGN KEY (`table_elem_id`) REFERENCES `tables` (`elem_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='PDF table_rows表 - 存储表格行数据';
+
+-- ===========================
 -- 知识图谱相关表
 -- ===========================
 
@@ -110,6 +204,57 @@ CREATE TABLE `relations` (
   CONSTRAINT `fk_relations_tail_entity` FOREIGN KEY (`tail_entity_id`) REFERENCES `entities` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_relations_source_document` FOREIGN KEY (`source_document_id`) REFERENCES `documents` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='关系表';
+
+-- ===========================
+-- GraphRAG专用图谱表（MySQL简化实现）
+-- ===========================
+
+-- 图谱节点表（支持Section/Block/Entity/Claim等多种节点类型）
+DROP TABLE IF EXISTS `graph_nodes`;
+CREATE TABLE `graph_nodes` (
+  `id` int(11) NOT NULL AUTO_INCREMENT COMMENT '节点ID',
+  `document_id` int(11) NOT NULL COMMENT '文档ID',
+  `node_id` varchar(255) DEFAULT NULL COMMENT '节点唯一标识符（可选）',
+  `node_type` varchar(100) NOT NULL COMMENT '节点类型(Section/Block/Entity/Claim)',
+  `name` varchar(255) DEFAULT NULL COMMENT '节点名称',
+  `section_id` varchar(100) DEFAULT NULL COMMENT '所属section ID',
+  `elem_id` varchar(100) DEFAULT NULL COMMENT '元素ID',
+  `entity_uid` varchar(255) DEFAULT NULL COMMENT '实体唯一标识符',
+  `entity_type` varchar(100) DEFAULT NULL COMMENT '实体类型',
+  `claim_id` varchar(255) DEFAULT NULL COMMENT 'Claim ID',
+  `metric_type` varchar(100) DEFAULT NULL COMMENT '指标类型',
+  `title` text COMMENT '标题内容',
+  `properties` text COMMENT '节点属性(JSON格式)',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_document_id` (`document_id`),
+  KEY `idx_node_type` (`node_type`),
+  KEY `idx_section_id` (`section_id`),
+  KEY `idx_entity_type` (`entity_type`),
+  KEY `idx_entity_uid` (`entity_uid`),
+  KEY `idx_node_id` (`node_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='图谱节点表 - GraphRAG专用MySQL简化实现';
+
+-- 图谱关系表（支持MENTIONS/HAS_ENTITY/MEASURES等多种关系类型）
+DROP TABLE IF EXISTS `graph_relations`;
+CREATE TABLE `graph_relations` (
+  `id` int(11) NOT NULL AUTO_INCREMENT COMMENT '关系ID',
+  `document_id` int(11) NOT NULL COMMENT '文档ID',
+  `source_id` varchar(255) NOT NULL COMMENT '源节点ID',
+  `target_id` varchar(255) NOT NULL COMMENT '目标节点ID',
+  `relation_type` varchar(100) NOT NULL COMMENT '关系类型(MENTIONS/HAS_ENTITY/MEASURES)',
+  `confidence` float(4,3) DEFAULT NULL COMMENT '置信度',
+  `properties` text COMMENT '关系属性(JSON格式)',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_document_id` (`document_id`),
+  KEY `idx_source_id` (`source_id`),
+  KEY `idx_target_id` (`target_id`),
+  KEY `idx_relation_type` (`relation_type`),
+  KEY `idx_confidence` (`confidence`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='图谱关系表 - GraphRAG专用MySQL简化实现';
 
 -- ===========================
 -- 搜索和日志相关表
@@ -209,9 +354,13 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('enable_ocr', '1', 'boolean', '是否启用OCR'),
 ('ocr_language', 'chi_sim+eng', 'string', 'OCR识别语言'),
 ('log_retention_days', '30', 'integer', '日志保留天数'),
-('graphrag_version', '2.0.0', 'string', 'GraphRAG系统版本'),
+('graphrag_version', '2.1.0', 'string', 'GraphRAG系统版本'),
 ('enable_element_id', '1', 'boolean', '是否启用一家子element_id功能'),
-('enable_structured_data', '1', 'boolean', '是否启用table/img/chars结构化数据存储');
+('enable_structured_data', '1', 'boolean', '是否启用table/img/chars结构化数据存储'),
+('enable_pdf_mysql_storage', '1', 'boolean', '是否启用PDF结构化数据MySQL存储'),
+('pdf_bbox_normalization', '1', 'boolean', '是否启用PDF边界框坐标规范化'),
+('pdf_table_column_inference', '1', 'boolean', '是否启用PDF表格列数自动推断'),
+('pdf_row_text_formatting', '1', 'boolean', '是否启用PDF表格行文本格式化');
 
 -- ===========================
 -- 创建索引（优化查询性能）
@@ -225,6 +374,12 @@ CREATE INDEX `idx_chunk_doc_vector` ON `document_chunks` (`document_id`, `vector
 CREATE INDEX `idx_chunk_element_doc` ON `document_chunks` (`element_id`, `document_id`) COMMENT '按一家子ID和文档ID查询优化';
 CREATE INDEX `idx_chunk_doc_element_index` ON `document_chunks` (`document_id`, `element_id`, `chunk_index`) COMMENT '完整内容检索优化';
 CREATE INDEX `idx_chunk_hash_doc` ON `document_chunks` (`content_hash`, `document_id`) COMMENT '内容去重查询优化';
+
+-- PDF结构化数据表的复合索引（优化查询性能）
+CREATE INDEX `idx_sections_doc_page` ON `sections` (`doc_id`, `page_start`, `page_end`) COMMENT 'sections按文档和页码范围查询优化';
+CREATE INDEX `idx_figures_section_page` ON `figures` (`section_id`, `page`) COMMENT 'figures按section和页码查询优化';
+CREATE INDEX `idx_tables_section_size` ON `tables` (`section_id`, `n_rows`, `n_cols`) COMMENT 'tables按section和表格尺寸查询优化';
+CREATE INDEX `idx_table_rows_elem_index` ON `table_rows` (`table_elem_id`, `row_index`) COMMENT 'table_rows按表格和行索引查询优化';
 
 -- 其他表的复合索引
 CREATE INDEX `idx_entity_name_type` ON `entities` (`name`, `entity_type`);
@@ -271,6 +426,25 @@ SELECT
 FROM search_history
 WHERE search_time >= DATE_SUB(CURRENT_DATE, INTERVAL 30 DAY)
 GROUP BY DATE(search_time), search_type;
+
+-- PDF结构化数据统计视图
+CREATE OR REPLACE VIEW `v_pdf_structure_stats` AS
+SELECT 
+    d.id as doc_id,
+    d.filename,
+    COUNT(DISTINCT s.section_id) as sections_count,
+    COUNT(DISTINCT f.elem_id) as figures_count,
+    COUNT(DISTINCT t.elem_id) as tables_count,
+    COUNT(DISTINCT tr.id) as table_rows_count,
+    SUM(t.n_rows) as total_table_rows,
+    AVG(t.n_cols) as avg_table_cols
+FROM documents d
+LEFT JOIN sections s ON d.id = s.doc_id
+LEFT JOIN figures f ON s.section_id = f.section_id
+LEFT JOIN tables t ON s.section_id = t.section_id
+LEFT JOIN table_rows tr ON t.elem_id = tr.table_elem_id
+WHERE d.file_type = 'pdf'
+GROUP BY d.id, d.filename;
 
 -- ===========================
 -- 创建存储过程（数据维护）
@@ -387,7 +561,7 @@ FROM information_schema.tables
 WHERE table_schema = 'graph_rag';
 
 -- 输出初始化完成信息
-SELECT 'GraphRAG数据库v2.0初始化完成！' AS status;
+SELECT 'GraphRAG数据库v2.1初始化完成！包含PDF结构化数据存储功能' AS status;
 
 -- 显示document_chunks表的详细结构（验证更新）
 SELECT 'document_chunks表结构验证:' AS info;
@@ -397,4 +571,21 @@ DESCRIBE document_chunks;
 SELECT 'GraphRAG系统配置:' AS info;
 SELECT config_key, config_value, description 
 FROM system_config 
-WHERE config_key IN ('graphrag_version', 'enable_element_id', 'enable_structured_data', 'default_chunk_size', 'vector_dimension');
+WHERE config_key IN ('graphrag_version', 'enable_element_id', 'enable_structured_data', 'enable_pdf_mysql_storage', 'default_chunk_size', 'vector_dimension');
+
+-- 验证PDF结构化数据表
+SELECT 'PDF结构化数据表验证:' AS info;
+SELECT TABLE_NAME, TABLE_COMMENT, TABLE_ROWS 
+FROM information_schema.TABLES 
+WHERE TABLE_SCHEMA = 'graph_rag' 
+AND TABLE_NAME IN ('sections', 'figures', 'tables', 'table_rows')
+ORDER BY TABLE_NAME;
+
+-- 显示PDF结构化数据表的索引
+SELECT 'PDF表索引验证:' AS info;
+SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX
+FROM information_schema.STATISTICS 
+WHERE TABLE_SCHEMA = 'graph_rag' 
+AND TABLE_NAME IN ('sections', 'figures', 'tables', 'table_rows')
+AND INDEX_NAME NOT IN ('PRIMARY')
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;

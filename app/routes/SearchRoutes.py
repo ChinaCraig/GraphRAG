@@ -1,621 +1,450 @@
 """
-智能检索路由
-处理搜索、问答等智能检索相关的HTTP请求
+智能检索路由模块
+处理搜索相关的HTTP请求，支持流式响应
+只负责接口的入参和返参处理，不处理任何业务内容
 """
 
-import logging
-from flask import Blueprint, request, jsonify
 import json
-
-from app.service.SearchService import SearchService
-
+import traceback
+from flask import Blueprint, request, Response, current_app
+from flask_socketio import emit
+from app.service.search.SearchRouteService import SearchRouteService
+from app.service.search.SearchFormatService import SearchFormatService
+from app.service.search.SearchAnswerService import SearchAnswerService
 
 # 创建蓝图
 search_bp = Blueprint('search', __name__, url_prefix='/api/search')
 
-# 初始化服务
-search_service = SearchService()
+# 初始化服务实例
+route_service = SearchRouteService()
+format_service = SearchFormatService()
+answer_service = SearchAnswerService()
 
-logger = logging.getLogger(__name__)
 
-
-@search_bp.route('/vector', methods=['POST'])
-def vector_search():
+@search_bp.route('/intelligent', methods=['POST', 'GET'])
+def intelligent_search():
     """
-    向量相似性搜索接口
+    智能检索接口
     
-    Returns:
-        JSON响应，包含搜索结果
+    Request Body:
+        {
+            "query": "用户查询文本",
+            "user_id": "用户ID（可选）",
+            "session_id": "会话ID（可选）",
+            "stream": true/false,  # 是否流式响应
+            "filters": {           # 过滤条件（可选）
+                "time_range": ["start_time", "end_time"],
+                "doc_types": ["pdf", "docx"],
+                "departments": ["部门1", "部门2"]
+            }
+        }
+    
+    Response:
+        流式响应或一次性响应，包含理解、召回、答案生成的过程
     """
     try:
-        data = request.get_json()
-        if not data or 'query' not in data:
-            return jsonify({
-                'success': False,
-                'message': '缺少查询参数',
-                'code': 400
-            }), 400
+        # 根据请求方法获取参数
+        if request.method == 'POST':
+            # POST请求从JSON获取参数
+            request_data = request.get_json()
+            if not request_data:
+                return {
+                    "success": False,
+                    "message": "请求体不能为空"
+                }, 400
+            
+            query = request_data.get('query', '').strip()
+            user_id = request_data.get('user_id', 'anonymous')
+            session_id = request_data.get('session_id', 'default')
+            stream = request_data.get('stream', True)
+            filters = request_data.get('filters', {})
+        else:
+            # GET请求从URL参数获取
+            query = request.args.get('query', '').strip()
+            user_id = request.args.get('user_id', 'anonymous')
+            session_id = request.args.get('session_id', 'default')
+            stream = request.args.get('stream', 'true').lower() == 'true'
+            filters = {}
         
-        query = data['query'].strip()
         if not query:
-            return jsonify({
-                'success': False,
-                'message': '查询内容不能为空',
-                'code': 400
-            }), 400
+            return {
+                "success": False,
+                "message": "查询内容不能为空"
+            }, 400
         
-        # 获取搜索参数
-        top_k = data.get('top_k', 10)
-        filters = data.get('filters', {})
+        # 验证参数长度
+        if len(query) > 1000:
+            return {
+                "success": False,
+                "message": "查询内容过长，请控制在1000字符以内"
+            }, 400
         
-        # 参数验证
-        if top_k < 1 or top_k > 100:
-            top_k = 10
+        current_app.logger.info(f"开始智能检索 - query: {query[:100]}..., user_id: {user_id}, stream: {stream}")
         
-        # 执行向量搜索
-        results = search_service.vector_search(
-            query=query,
-            top_k=top_k,
-            filters=filters
-        )
+        # 如果是流式响应
+        if stream:
+            return Response(
+                _stream_search_process(query, user_id, session_id, filters),
+                mimetype='text/event-stream',
+                headers={
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Cache-Control'
+                }
+            )
+        else:
+            # 非流式响应，一次性返回完整结果
+            return _complete_search_process(query, user_id, session_id, filters)
+    
+    except Exception as e:
+        current_app.logger.error(f"智能检索接口错误: {str(e)}\n{traceback.format_exc()}")
+        return {
+            "success": False,
+            "message": f"服务器内部错误: {str(e)}"
+        }, 500
+
+
+def _stream_search_process(query, user_id, session_id, filters):
+    """
+    流式搜索过程，生成器函数
+    严格按照SSE格式输出增量内容
+    
+    Args:
+        query: 查询文本
+        user_id: 用户ID
+        session_id: 会话ID
+        filters: 过滤条件
         
-        return jsonify({
-            'success': True,
-            'message': '向量搜索完成',
-            'data': {
-                'query': query,
-                'results': results,
-                'total': len(results)
+    Yields:
+        str: SSE格式的响应数据
+    """
+    try:
+        # 第一阶段：理解过程（Query理解与路由）
+        yield _format_sse_event("stage_update", {
+            "stage": "understanding",
+            "message": "🔍 正在理解您的查询...",
+            "progress": 10
+        })
+        
+        # 调用理解服务
+        understanding_result = route_service.process_query(query, filters)
+        
+        yield _format_sse_event("stage_update", {
+            "stage": "understanding", 
+            "message": "✅ 查询理解完成",
+            "progress": 30,
+            "data": {
+                "query_type": understanding_result.get("query_type"),
+                "entities": understanding_result.get("entities"),
+                "intent": understanding_result.get("intent")
+            }
+        })
+        
+        # 第二阶段：召回融合过程
+        yield _format_sse_event("stage_update", {
+            "stage": "retrieval",
+            "message": "📚 正在搜索相关内容...",
+            "progress": 50
+        })
+        
+        # 调用召回服务
+        retrieval_result = format_service.retrieve_and_rerank(understanding_result, filters)
+        
+        yield _format_sse_event("stage_update", {
+            "stage": "retrieval",
+            "message": f"✅ 内容召回完成，找到 {len(retrieval_result.get('candidates', []))} 个相关片段",
+            "progress": 70,
+            "data": {
+                "total_found": retrieval_result.get("total_found", 0),
+                "final_count": len(retrieval_result.get("candidates", []))
+            }
+        })
+        
+        # 第三阶段：答案生成过程
+        yield _format_sse_event("stage_update", {
+            "stage": "generation", 
+            "message": "✍️ 正在生成答案...",
+            "progress": 80
+        })
+        
+        # 流式生成答案 - 边生成边推送
+        for chunk in answer_service.generate_answer_stream(query, retrieval_result, understanding_result):
+            if chunk.get("type") == "answer_chunk":
+                # 推送文本增量
+                yield _format_sse_event("text_delta", {
+                    "content": chunk.get("content", ""),
+                    "append": True
+                })
+            elif chunk.get("type") == "multimodal_content":
+                # 推送多模态内容事件
+                content_type = chunk.get("content_type")
+                if content_type == "image":
+                    yield _format_sse_event("render_image", chunk.get("data", {}))
+                elif content_type == "table":
+                    yield _format_sse_event("render_table", chunk.get("data", {}))
+                elif content_type == "chart":
+                    yield _format_sse_event("render_chart", chunk.get("data", {}))
+            elif chunk.get("type") == "final_answer":
+                # 推送最终完整答案（包含引用链接等）
+                yield _format_sse_event("final_answer", {
+                    "answer": chunk.get("content", {}),
+                    "context": chunk.get("context", {}),
+                    "metadata": chunk.get("metadata", {})
+                })
+        
+        # 完成
+        yield _format_sse_event("completed", {
+            "message": "🎉 检索完成",
+            "progress": 100
+        })
+        
+    except Exception as e:
+        current_app.logger.error(f"流式搜索过程错误: {str(e)}\n{traceback.format_exc()}")
+        yield _format_sse_event("error", {
+            "message": f"❌ 处理过程中发生错误: {str(e)}"
+        })
+
+
+def _complete_search_process(query, user_id, session_id, filters):
+    """
+    完整搜索过程，一次性返回结果
+    
+    Args:
+        query: 查询文本
+        user_id: 用户ID
+        session_id: 会话ID
+        filters: 过滤条件
+        
+    Returns:
+        tuple: (response_dict, status_code)
+    """
+    try:
+        # 理解阶段
+        understanding_result = route_service.process_query(query, filters)
+        
+        # 召回阶段
+        retrieval_result = format_service.retrieve_and_rerank(understanding_result, filters)
+        
+        # 答案生成阶段
+        final_answer = answer_service.generate_answer_complete(query, retrieval_result, understanding_result)
+        
+        return {
+            "success": True,
+            "data": {
+                "query": query,
+                "understanding": understanding_result,
+                "retrieval": {
+                    "total_found": retrieval_result.get("total_found", 0),
+                    "final_count": len(retrieval_result.get("candidates", [])),
+                    "sources": retrieval_result.get("sources", [])
+                },
+                "answer": final_answer
             },
-            'code': 200
-        }), 200
+            "user_id": user_id,
+            "session_id": session_id
+        }, 200
         
     except Exception as e:
-        logger.error(f"向量搜索失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'向量搜索失败: {str(e)}',
-            'code': 500
-        }), 500
+        current_app.logger.error(f"完整搜索过程错误: {str(e)}\n{traceback.format_exc()}")
+        return {
+            "success": False,
+            "message": f"搜索失败: {str(e)}"
+        }, 500
 
 
-@search_bp.route('/graph', methods=['POST'])
-def graph_search():
+def _format_sse_event(event_type, data):
     """
-    知识图谱搜索接口
+    格式化SSE事件数据
+    
+    Args:
+        event_type: 事件类型
+        data: 事件数据
+        
+    Returns:
+        str: SSE格式的事件字符串
+    """
+    response = {
+        "timestamp": _get_current_timestamp(),
+        **data
+    }
+    
+    # SSE格式: event: 事件类型\ndata: JSON数据\n\n
+    event_data = json.dumps(response, ensure_ascii=False)
+    return f"event: {event_type}\ndata: {event_data}\n\n"
+
+
+def _get_current_timestamp():
+    """
+    获取当前时间戳
     
     Returns:
-        JSON响应，包含搜索结果
+        str: ISO格式时间戳
     """
-    try:
-        data = request.get_json()
-        if not data or 'entity' not in data:
-            return jsonify({
-                'success': False,
-                'message': '缺少实体参数',
-                'code': 400
-            }), 400
-        
-        entity_name = data['entity'].strip()
-        if not entity_name:
-            return jsonify({
-                'success': False,
-                'message': '实体名称不能为空',
-                'code': 400
-            }), 400
-        
-        relationship_types = data.get('relationship_types', None)
-        
-        # 执行图搜索
-        results = search_service.graph_search(
-            entity_name=entity_name,
-            relationship_types=relationship_types
-        )
-        
-        return jsonify({
-            'success': True,
-            'message': '知识图谱搜索完成',
-            'data': {
-                'entity': entity_name,
-                'results': results
-            },
-            'code': 200
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"知识图谱搜索失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'知识图谱搜索失败: {str(e)}',
-            'code': 500
-        }), 500
-
-
-@search_bp.route('/hybrid', methods=['POST'])
-def hybrid_search():
-    """
-    混合搜索接口（向量+图谱）
-    
-    Returns:
-        JSON响应，包含搜索结果
-    """
-    try:
-        data = request.get_json()
-        if not data or 'query' not in data:
-            return jsonify({
-                'success': False,
-                'message': '缺少查询参数',
-                'code': 400
-            }), 400
-        
-        query = data['query'].strip()
-        if not query:
-            return jsonify({
-                'success': False,
-                'message': '查询内容不能为空',
-                'code': 400
-            }), 400
-        
-        # 获取搜索参数
-        top_k = data.get('top_k', 10)
-        enable_graph = data.get('enable_graph', True)
-        filters = data.get('filters', {})
-        
-        # 参数验证
-        if top_k < 1 or top_k > 100:
-            top_k = 10
-        
-        # 执行混合搜索
-        results = search_service.hybrid_search(
-            query=query,
-            top_k=top_k,
-            enable_graph=enable_graph,
-            filters=filters
-        )
-        
-        return jsonify({
-            'success': True,
-            'message': '混合搜索完成',
-            'data': results,
-            'code': 200
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"混合搜索失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'混合搜索失败: {str(e)}',
-            'code': 500
-        }), 500
-
-
-@search_bp.route('/semantic', methods=['POST'])
-def semantic_search():
-    """
-    语义搜索接口
-    
-    Returns:
-        JSON响应，包含搜索结果
-    """
-    try:
-        data = request.get_json()
-        if not data or 'query' not in data:
-            return jsonify({
-                'success': False,
-                'message': '缺少查询参数',
-                'code': 400
-            }), 400
-        
-        query = data['query'].strip()
-        if not query:
-            return jsonify({
-                'success': False,
-                'message': '查询内容不能为空',
-                'code': 400
-            }), 400
-        
-        # 获取搜索参数
-        search_type = data.get('search_type', 'all')  # vector, graph, all
-        top_k = data.get('top_k', 10)
-        filters = data.get('filters', {})
-        
-        # 参数验证
-        if search_type not in ['vector', 'graph', 'all']:
-            search_type = 'all'
-        
-        if top_k < 1 or top_k > 100:
-            top_k = 10
-        
-        # 执行语义搜索
-        results = search_service.semantic_search(
-            query=query,
-            search_type=search_type,
-            top_k=top_k,
-            filters=filters
-        )
-        
-        return jsonify({
-            'success': True,
-            'message': '语义搜索完成',
-            'data': results,
-            'code': 200
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"语义搜索失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'语义搜索失败: {str(e)}',
-            'code': 500
-        }), 500
-
-
-@search_bp.route('/qa', methods=['POST'])
-def question_answering():
-    """
-    智能问答接口
-    
-    Returns:
-        JSON响应，包含问答结果
-    """
-    try:
-        data = request.get_json()
-        if not data or 'question' not in data:
-            return jsonify({
-                'success': False,
-                'message': '缺少问题参数',
-                'code': 400
-            }), 400
-        
-        question = data['question'].strip()
-        if not question:
-            return jsonify({
-                'success': False,
-                'message': '问题内容不能为空',
-                'code': 400
-            }), 400
-        
-        # 获取上下文限制参数
-        context_limit = data.get('context_limit', 5)
-        
-        # 参数验证
-        if context_limit < 1 or context_limit > 20:
-            context_limit = 5
-        
-        # 执行问答
-        results = search_service.question_answering(
-            question=question,
-            context_limit=context_limit
-        )
-        
-        return jsonify({
-            'success': True,
-            'message': '问答完成',
-            'data': results,
-            'code': 200
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"智能问答失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'智能问答失败: {str(e)}',
-            'code': 500
-        }), 500
+    from datetime import datetime
+    return datetime.now().isoformat()
 
 
 @search_bp.route('/suggestions', methods=['GET'])
 def get_search_suggestions():
     """
-    获取搜索建议接口
+    获取搜索建议
     
-    Returns:
-        JSON响应，包含搜索建议
+    Query Parameters:
+        q: 部分查询文本
+        limit: 返回建议数量，默认10
+    
+    Response:
+        {
+            "success": true,
+            "data": [
+                {
+                    "text": "建议文本",
+                    "type": "entity|concept|question",
+                    "score": 0.95
+                }
+            ]
+        }
     """
     try:
-        # 获取查询参数
-        partial_query = request.args.get('q', '').strip()
-        limit = request.args.get('limit', 5, type=int)
+        query = request.args.get('q', '').strip()
+        limit = int(request.args.get('limit', 10))
         
-        if not partial_query:
-            return jsonify({
-                'success': False,
-                'message': '缺少查询参数',
-                'code': 400
-            }), 400
+        if not query:
+            return {
+                "success": True,
+                "data": []
+            }
         
-        # 参数验证
-        if limit < 1 or limit > 20:
-            limit = 5
+        # 调用路由服务获取建议
+        suggestions = route_service.get_search_suggestions(query, limit)
         
-        # 获取搜索建议
-        suggestions = search_service.get_search_suggestions(
-            partial_query=partial_query,
-            limit=limit
-        )
-        
-        return jsonify({
-            'success': True,
-            'message': '获取搜索建议成功',
-            'data': {
-                'query': partial_query,
-                'suggestions': suggestions,
-                'total': len(suggestions)
-            },
-            'code': 200
-        }), 200
+        return {
+            "success": True,
+            "data": suggestions
+        }
         
     except Exception as e:
-        logger.error(f"获取搜索建议失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'获取搜索建议失败: {str(e)}',
-            'code': 500
-        }), 500
+        current_app.logger.error(f"获取搜索建议错误: {str(e)}")
+        return {
+            "success": False,
+            "message": f"获取建议失败: {str(e)}"
+        }, 500
 
 
 @search_bp.route('/history', methods=['GET'])
 def get_search_history():
     """
-    获取搜索历史接口
+    获取搜索历史
     
-    Returns:
-        JSON响应，包含搜索历史
+    Query Parameters:
+        user_id: 用户ID
+        limit: 返回历史数量，默认20
+        offset: 偏移量，默认0
+    
+    Response:
+        {
+            "success": true,
+            "data": {
+                "total": 100,
+                "items": [
+                    {
+                        "query": "查询文本",
+                        "timestamp": "2024-01-01T00:00:00Z",
+                        "result_count": 10
+                    }
+                ]
+            }
+        }
     """
     try:
-        # 获取查询参数
-        page = request.args.get('page', 1, type=int)
-        page_size = request.args.get('page_size', 20, type=int)
-        search_type = request.args.get('search_type', None)
+        user_id = request.args.get('user_id', 'anonymous')
+        limit = int(request.args.get('limit', 20))
+        offset = int(request.args.get('offset', 0))
         
-        # 参数验证
-        if page < 1:
-            page = 1
-        if page_size < 1 or page_size > 100:
-            page_size = 20
+        # 调用路由服务获取历史
+        history = route_service.get_search_history(user_id, limit, offset)
         
-        # 这里应该从数据库获取搜索历史
-        # 暂时返回空结果
-        history_data = {
-            'history': [],
-            'total': 0,
-            'page': page,
-            'page_size': page_size,
-            'total_pages': 0
+        return {
+            "success": True,
+            "data": history
         }
         
-        return jsonify({
-            'success': True,
-            'message': '获取搜索历史成功',
-            'data': history_data,
-            'code': 200
-        }), 200
-        
     except Exception as e:
-        logger.error(f"获取搜索历史失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'获取搜索历史失败: {str(e)}',
-            'code': 500
-        }), 500
-
-
-@search_bp.route('/export', methods=['POST'])
-def export_search_results():
-    """
-    导出搜索结果接口
-    
-    Returns:
-        JSON响应，包含导出结果
-    """
-    try:
-        data = request.get_json()
-        if not data or 'search_results' not in data:
-            return jsonify({
-                'success': False,
-                'message': '缺少搜索结果数据',
-                'code': 400
-            }), 400
-        
-        search_results = data['search_results']
-        export_format = data.get('format', 'json')  # json, csv, excel
-        
-        # 参数验证
-        if export_format not in ['json', 'csv', 'excel']:
-            export_format = 'json'
-        
-        # 这里应该实现实际的导出逻辑
-        # 暂时返回成功响应
-        export_data = {
-            'export_id': 'export_' + str(hash(str(search_results))),
-            'format': export_format,
-            'file_size': len(str(search_results)),
-            'download_url': f'/api/search/download/{export_format}'
-        }
-        
-        return jsonify({
-            'success': True,
-            'message': '搜索结果导出成功',
-            'data': export_data,
-            'code': 200
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"导出搜索结果失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'导出搜索结果失败: {str(e)}',
-            'code': 500
-        }), 500
+        current_app.logger.error(f"获取搜索历史错误: {str(e)}")
+        return {
+            "success": False,
+            "message": f"获取历史失败: {str(e)}"
+        }, 500
 
 
 @search_bp.route('/stats', methods=['GET'])
 def get_search_stats():
     """
-    获取搜索统计信息接口
+    获取搜索统计信息
     
-    Returns:
-        JSON响应，包含统计信息
+    Response:
+        {
+            "success": true,
+            "data": {
+                "total_searches": 1000,
+                "today_searches": 50,
+                "avg_response_time": 2.5,
+                "popular_queries": ["query1", "query2"]
+            }
+        }
     """
     try:
-        # 获取查询参数
-        time_range = request.args.get('time_range', '7d')  # 1d, 7d, 30d, all
+        # 调用路由服务获取统计
+        stats = route_service.get_search_stats()
         
-        # 这里应该从数据库获取实际的统计数据
-        # 暂时返回模拟数据
-        stats_data = {
-            'total_searches': 0,
-            'vector_searches': 0,
-            'graph_searches': 0,
-            'qa_requests': 0,
-            'avg_response_time': 0.0,
-            'popular_queries': [],
-            'search_trends': []
+        return {
+            "success": True,
+            "data": stats
         }
         
-        return jsonify({
-            'success': True,
-            'message': '获取搜索统计信息成功',
-            'data': stats_data,
-            'code': 200
-        }), 200
-        
     except Exception as e:
-        logger.error(f"获取搜索统计信息失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'获取搜索统计信息失败: {str(e)}',
-            'code': 500
-        }), 500
+        current_app.logger.error(f"获取搜索统计错误: {str(e)}")
+        return {
+            "success": False,
+            "message": f"获取统计失败: {str(e)}"
+        }, 500
 
 
-@search_bp.route('/feedback', methods=['POST'])
-def submit_search_feedback():
+# WebSocket事件处理（可选，用于实时搜索）
+def register_socketio_events(socketio):
     """
-    提交搜索反馈接口
-    
-    Returns:
-        JSON响应，包含提交结果
-    """
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                'success': False,
-                'message': '缺少反馈数据',
-                'code': 400
-            }), 400
-        
-        # 获取反馈参数
-        search_id = data.get('search_id')
-        rating = data.get('rating')  # 1-5分
-        feedback_text = data.get('feedback', '')
-        helpful_results = data.get('helpful_results', [])
-        
-        # 参数验证
-        if rating is not None and (rating < 1 or rating > 5):
-            return jsonify({
-                'success': False,
-                'message': '评分必须在1-5之间',
-                'code': 400
-            }), 400
-        
-        # 这里应该将反馈数据保存到数据库
-        # 暂时返回成功响应
-        
-        return jsonify({
-            'success': True,
-            'message': '反馈提交成功',
-            'data': {
-                'feedback_id': f'feedback_{hash(str(data))}',
-                'timestamp': '2024-01-01T00:00:00Z'
-            },
-            'code': 200
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"提交搜索反馈失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'提交搜索反馈失败: {str(e)}',
-            'code': 500
-        }), 500
-
-
-@search_bp.route('/similar/<int:document_id>', methods=['GET'])
-def find_similar_documents(document_id):
-    """
-    查找相似文档接口
+    注册WebSocket事件处理器
     
     Args:
-        document_id: 文档ID
-        
-    Returns:
-        JSON响应，包含相似文档列表
+        socketio: SocketIO实例
     """
-    try:
-        # 获取查询参数
-        top_k = request.args.get('top_k', 10, type=int)
-        similarity_threshold = request.args.get('threshold', 0.7, type=float)
-        
-        # 参数验证
-        if top_k < 1 or top_k > 50:
-            top_k = 10
-        
-        if similarity_threshold < 0 or similarity_threshold > 1:
-            similarity_threshold = 0.7
-        
-        # 这里应该实现相似文档查找逻辑
-        # 暂时返回空结果
-        similar_docs = []
-        
-        return jsonify({
-            'success': True,
-            'message': '相似文档查找完成',
-            'data': {
-                'document_id': document_id,
-                'similar_documents': similar_docs,
-                'total': len(similar_docs),
-                'threshold': similarity_threshold
-            },
-            'code': 200
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"查找相似文档失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'查找相似文档失败: {str(e)}',
-            'code': 500
-        }), 500
+    
+    @socketio.on('search_query')
+    def handle_search_query(data):
+        """
+        处理实时搜索查询
+        """
+        try:
+            query = data.get('query', '').strip()
+            if not query:
+                emit('search_error', {'message': '查询内容不能为空'})
+                return
+            
+            # 发送搜索开始事件
+            emit('search_started', {'query': query})
+            
+            # 这里可以调用搜索服务并通过WebSocket发送实时更新
+            # 暂时发送一个模拟响应
+            emit('search_result', {
+                'query': query,
+                'message': 'WebSocket搜索功能开发中...'
+            })
+            
+        except Exception as e:
+            current_app.logger.error(f"WebSocket搜索错误: {str(e)}")
+            emit('search_error', {'message': f'搜索失败: {str(e)}'})
 
 
-# 错误处理
-@search_bp.errorhandler(400)
-def bad_request(e):
-    """处理请求错误"""
-    return jsonify({
-        'success': False,
-        'message': '请求参数错误',
-        'code': 400
-    }), 400
-
-
-@search_bp.errorhandler(404)
-def not_found(e):
-    """处理资源不存在错误"""
-    return jsonify({
-        'success': False,
-        'message': '请求的资源不存在',
-        'code': 404
-    }), 404
-
-
-@search_bp.errorhandler(500)
-def internal_error(e):
-    """处理内部服务器错误"""
-    return jsonify({
-        'success': False,
-        'message': '内部服务器错误',
-        'code': 500
-    }), 500
+# 导出蓝图和WebSocket事件注册函数
+__all__ = ['search_bp', 'register_socketio_events']
