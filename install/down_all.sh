@@ -20,6 +20,22 @@ echo "📁 项目根目录: $PROJECT_ROOT"
 echo "📁 脚本目录: $SCRIPT_DIR"
 echo ""
 
+# 自动加载网络配置（如果存在）
+NETWORK_CONFIG_ALL="$SCRIPT_DIR/.network_config.all"
+NETWORK_CONFIG_PROXY="$SCRIPT_DIR/.network_config"
+NETWORK_CONFIG_MIRROR="$SCRIPT_DIR/.network_config.mirror"
+NETWORK_CONFIG_ENV="$SCRIPT_DIR/.network_config.env"
+
+# 静默加载配置文件
+if [ -f "$NETWORK_CONFIG_ALL" ]; then
+    . "$NETWORK_CONFIG_ALL"
+else
+    # 分别加载各个配置文件
+    [ -f "$NETWORK_CONFIG_PROXY" ] && . "$NETWORK_CONFIG_PROXY"
+    [ -f "$NETWORK_CONFIG_MIRROR" ] && . "$NETWORK_CONFIG_MIRROR"
+    [ -f "$NETWORK_CONFIG_ENV" ] && . "$NETWORK_CONFIG_ENV"
+fi
+
 # 检查Python环境
 if ! command -v python3 >/dev/null 2>&1; then
     echo "❌ 错误: 未找到python3命令"

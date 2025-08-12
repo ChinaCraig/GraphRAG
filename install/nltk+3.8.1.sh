@@ -28,8 +28,47 @@ import nltk
 import ssl
 import sys
 import os
+import time
 
 print("🔧 配置NLTK环境...")
+
+# 配置网络优化
+import urllib.request
+import urllib.error
+
+# 默认使用清华大学NLTK镜像源（如果没有配置其他源）
+nltk_mirror = os.environ.get('NLTK_DATA_URL')
+if not nltk_mirror:
+    # 清华大学NLTK镜像源
+    nltk_mirror = 'https://mirrors.tuna.tsinghua.edu.cn/nltk_data/'
+    print("🪞 自动使用清华大学NLTK镜像源")
+    print(f"   镜像地址: {nltk_mirror}")
+    print("   如需使用其他源，请设置 NLTK_DATA_URL 环境变量")
+else:
+    print(f"🪞 使用配置的NLTK镜像源: {nltk_mirror}")
+
+# 设置NLTK下载镜像源
+nltk.download_data_url = nltk_mirror
+print("")
+
+# 设置下载超时
+import socket
+socket.setdefaulttimeout(30)  # 30秒超时
+
+# 测试网络连接
+print("🔗 测试网络连接...")
+try:
+    import urllib.request
+    with urllib.request.urlopen(nltk_mirror, timeout=10) as response:
+        if response.status == 200:
+            print("✅ 镜像源连接正常")
+        else:
+            print(f"⚠️  镜像源响应状态: {response.status}")
+except Exception as e:
+    print(f"⚠️  镜像源连接测试失败: {e}")
+    print("📡 将继续尝试下载...")
+
+print("")
 
 # 解决SSL证书验证问题 (适用于所有平台)
 try:
@@ -60,27 +99,89 @@ packages = [
 
 print("📦 开始下载NLTK数据包...")
 print(f"🎯 计划下载 {len(packages)} 个数据包")
+print("💡 如果下载时间较长，请耐心等待...")
+print("🔍 如果长时间无响应，可按Ctrl+C中断后重试")
 print("")
 
 success_count = 0
 total_count = len(packages)
 
 for i, package in enumerate(packages, 1):
-    try:
-        print(f"[{i}/{total_count}] 📦 下载 {package}...")
-        nltk.download(package, quiet=True)
-        print(f"✅ {package} 下载完成")
-        success_count += 1
-    except Exception as e:
-        print(f"⚠️  {package} 下载失败: {str(e)}")
-        # 尝试使用备用方法
+    max_retries = 3
+    retry_delay = 2  # 秒
+    package_success = False
+    
+    for attempt in range(1, max_retries + 1):
         try:
-            print(f"🔄 尝试备用下载方法...")
-            nltk.download(package, download_dir=nltk_data_dir, quiet=True)
-            print(f"✅ {package} 备用方法下载完成")
+            if attempt > 1:
+                print(f"[{i}/{total_count}] 📦 下载 {package}... (重试 {attempt-1}/{max_retries-1})")
+            else:
+                print(f"[{i}/{total_count}] 📦 下载 {package}...")
+            
+            # 显示详细下载信息，不使用quiet模式以便看到进度
+            print(f"🔄 正在连接镜像源...")
+            print(f"📡 镜像地址: {nltk_mirror}")
+            sys.stdout.flush()  # 立即刷新输出
+            
+            # 开始计时
+            import time
+            start_time = time.time()
+            
+            # 使用非quiet模式以显示下载进度
+            print(f"⬇️  开始下载数据包...")
+            sys.stdout.flush()
+            result = nltk.download(package, quiet=False)
+            
+            # 显示下载耗时
+            end_time = time.time()
+            duration = end_time - start_time
+            print(f"⏱️  下载耗时: {duration:.1f}秒")
+            print(f"✅ {package} 下载完成")
             success_count += 1
-        except Exception as e2:
-            print(f"❌ {package} 备用方法也失败: {str(e2)}")
+            package_success = True
+            break
+            
+        except KeyboardInterrupt:
+            print("")
+            print("⚠️  用户中断下载")
+            print(f"💡 可以稍后重新运行脚本继续下载")
+            sys.exit(130)  # 标准的用户中断退出码
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ 下载出错: {error_msg}")
+            
+            if attempt < max_retries:
+                # 检查是否是网络相关错误
+                if any(keyword in error_msg.lower() for keyword in ['connection', 'timeout', 'network', 'ssl', 'certificate']):
+                    print(f"⚠️  {package} 下载失败 (尝试 {attempt}/{max_retries}): 网络错误")
+                    print(f"🔄 等待 {retry_delay} 秒后重试...")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    print(f"⚠️  {package} 下载失败: {error_msg}")
+                    break
+            else:
+                print(f"❌ {package} 多次重试后仍失败: {error_msg}")
+                
+                # 尝试使用备用方法
+                try:
+                    print(f"🔄 尝试备用下载方法...")
+                    print(f"💡 使用本地目录: {nltk_data_dir}")
+                    sys.stdout.flush()
+                    nltk.download(package, download_dir=nltk_data_dir, quiet=False)
+                    print(f"✅ {package} 备用方法下载完成")
+                    success_count += 1
+                    package_success = True
+                except Exception as e2:
+                    print(f"❌ {package} 备用方法也失败: {str(e2)}")
+                    
+                    # 如果是官方源问题，建议使用镜像源
+                    if 'ssl' in error_msg.lower() or 'certificate' in error_msg.lower():
+                        print(f"💡 {package} 可能需要网络优化:")
+                        print("   - SSL证书问题，这是正常的")
+                        print("   - 数据包会在首次使用时自动下载")
+                        print("   - 或手动设置 NLTK_DATA_URL 环境变量")
+    
     print("")
 
 print("="*50)
@@ -100,6 +201,11 @@ else:
     print("⚠️  部分数据包下载失败，但核心包已下载完成")
     print("   如果遇到SSL错误，这是正常的，程序可以正常运行")
     print("   缺失的数据包会在首次使用时自动下载")
+    print("")
+    print("🔧 网络问题解决方案:")
+    print("   1. 使用官方源: unset NLTK_DATA_URL")
+    print("   2. 使用代理: export HTTP_PROXY=http://127.0.0.1:7890")
+    print("   3. 运行网络配置: ./network_config.sh")
     sys.exit(0)
 EOF
 

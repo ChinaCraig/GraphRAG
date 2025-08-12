@@ -52,12 +52,45 @@ from pathlib import Path
 MODEL_NAME = "yolox_s.onnx"
 MODEL_DESC = "YOLOX-S文档布局检测模型(小型)"
 MODEL_SIZE = "~34MB"
-MODEL_URL = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx"
+
+# 配置GitHub镜像源 - 多个备用源提高成功率
+original_url = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx"
+
+# 如果用户设置了GITHUB_MIRROR，优先使用
+github_mirror = os.environ.get('GITHUB_MIRROR')
+if github_mirror:
+    mirror_urls = [github_mirror + original_url]
+    print(f"🪞 使用用户配置的GitHub镜像: {github_mirror}")
+else:
+    # 多个稳定的镜像源，按稳定性排序
+    mirrors = [
+        'https://mirror.ghproxy.com/',           # 镜像代理
+        'https://ghproxy.net/',                 # 备用代理1
+        'https://gh-proxy.com/',                # 备用代理2  
+        'https://ghps.cc/',                     # 备用代理3
+        '',                                     # 官方源（最后尝试）
+    ]
+    
+    mirror_urls = []
+    for mirror in mirrors:
+        if mirror:
+            mirror_urls.append(mirror + original_url)
+        else:
+            mirror_urls.append(original_url)
+    
+    print("🪞 自动使用多个GitHub镜像源（提高下载成功率）")
+    print("   镜像源列表:")
+    for i, url in enumerate(mirror_urls):
+        if i == len(mirror_urls) - 1:
+            print(f"   {i+1}. GitHub官方源")
+        else:
+            mirror_name = url.split('//')[1].split('/')[0]
+            print(f"   {i+1}. {mirror_name}")
+    print("   如需使用特定源，请设置 GITHUB_MIRROR 环境变量")
 
 print(f"📄 模型: {MODEL_NAME}")
 print(f"📝 描述: {MODEL_DESC}")
 print(f"📦 大小: {MODEL_SIZE}")
-print(f"🌐 下载地址: {MODEL_URL}")
 print("")
 
 # 设置模型缓存目录
@@ -103,13 +136,21 @@ if os.path.exists(model_path):
     print(f"📝 配置说明已保存: {config_path}")
     sys.exit(0)
 
-def download_file(url, local_path, description):
+def download_file(url, local_path, description, mirror_name=""):
     """下载文件到本地"""
-    print(f"🔄 开始下载 {description}...")
+    if mirror_name:
+        print(f"🔄 尝试从 {mirror_name} 下载...")
+    else:
+        print(f"🔄 开始下载 {description}...")
     
     try:
-        # 发送请求
-        response = requests.get(url, stream=True)
+        # 设置超时和重试参数
+        import time
+        
+        print(f"🌐 下载地址: {url}")
+        
+        # 发送请求，设置超时
+        response = requests.get(url, stream=True, timeout=(10, 30))
         response.raise_for_status()
         
         total_size = int(response.headers.get('content-length', 0))
@@ -129,13 +170,41 @@ def download_file(url, local_path, description):
         print(f"\n✅ {description} 下载完成")
         return True
         
+    except requests.exceptions.Timeout:
+        print(f"\n❌ 下载超时: 连接 {url.split('//')[1].split('/')[0]} 超时")
+        return False
+    except requests.exceptions.ConnectionError as e:
+        print(f"\n❌ 连接失败: {str(e)}")
+        return False
     except Exception as e:
         print(f"\n❌ {description} 下载失败: {str(e)}")
         return False
 
+def download_with_retry(urls, local_path, description):
+    """使用多个镜像源重试下载"""
+    print(f"🚀 开始下载 {MODEL_NAME}...")
+    print(f"📋 共有 {len(urls)} 个镜像源可尝试")
+    print("")
+    
+    for i, url in enumerate(urls):
+        if i == len(urls) - 1:
+            mirror_name = "GitHub官方源"
+        else:
+            mirror_name = f"镜像源{i+1}({url.split('//')[1].split('/')[0]})"
+        
+        print(f"[{i+1}/{len(urls)}] 尝试 {mirror_name}...")
+        
+        if download_file(url, local_path, description, mirror_name):
+            return True
+        
+        if i < len(urls) - 1:
+            print("⏭️  切换到下一个镜像源...")
+            print("")
+    
+    return False
+
 # 执行下载
-print(f"🚀 开始下载 {MODEL_NAME}...")
-if download_file(MODEL_URL, model_path, MODEL_DESC):
+if download_with_retry(mirror_urls, model_path, MODEL_DESC):
     
     # 验证文件
     if os.path.exists(model_path):
@@ -186,6 +255,12 @@ else:
     print("   - 模型会在首次使用时自动下载")
     print("   - 这不会影响程序正常运行")
     print("   - 可以稍后重新尝试运行此脚本")
+    print("")
+    print("🔧 故障排除建议:")
+    print("   1. 检查网络连接和防火墙设置")
+    print("   2. 尝试使用代理: export HTTP_PROXY=http://127.0.0.1:7890")
+    print("   3. 使用官方源: export GITHUB_MIRROR=''")
+    print("   4. 手动下载文件到: ~/.cache/unstructured/models/yolox_s.onnx")
     sys.exit(1)
 EOF
 

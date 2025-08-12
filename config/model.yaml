@@ -17,7 +17,7 @@ deepseek:
 
 # 嵌入模型配置
 embedding:
-  model_name: "paraphrase-multilingual-mpnet-base-v2"  # 嵌入模型名称
+  model_name: "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"  # 嵌入模型名称
   dimension: 768                                        # 向量维度
   max_length: 512                                      # 最大输入长度
   batch_size: 32                                       # 批处理大小

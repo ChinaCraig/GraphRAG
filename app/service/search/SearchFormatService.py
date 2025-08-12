@@ -10,10 +10,12 @@ import json
 import logging
 import math
 import numpy as np
+import os
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from collections import defaultdict
 import yaml
+from sentence_transformers import SentenceTransformer
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -124,6 +126,32 @@ class SearchFormatService:
         except Exception as e:
             logger.error(f"重排模型初始化失败: {str(e)}")
             self.reranker = None
+        
+        # 初始化嵌入模型用于查询编码
+        self._init_embedding_model()
+    
+    def _init_embedding_model(self):
+        """初始化嵌入模型"""
+        try:
+            model_name = self.model_config['embedding']['model_name']
+            cache_dir = self.model_config['embedding']['cache_dir']
+            
+            # 设置HuggingFace缓存目录环境变量
+            os.environ['HF_HOME'] = os.path.abspath(cache_dir)
+            os.environ['TRANSFORMERS_CACHE'] = os.path.abspath(cache_dir)
+            os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.abspath(cache_dir)
+            
+            self.embedding_model = SentenceTransformer(
+                model_name,
+                cache_folder=cache_dir
+            )
+            
+            self.normalize = self.model_config['embedding']['normalize']
+            logger.info(f"搜索服务嵌入模型初始化成功: {model_name}")
+            
+        except Exception as e:
+            logger.error(f"搜索服务嵌入模型初始化失败: {str(e)}")
+            self.embedding_model = None
     
     def retrieve_and_rerank(self, understanding_result: Dict, filters: Dict = None) -> Dict:
         """
@@ -375,9 +403,17 @@ class SearchFormatService:
     def _encode_query(self, query: str) -> List[float]:
         """编码查询为向量"""
         try:
-            # 这里应该使用真实的embedding模型
-            # 目前返回模拟向量
-            return [0.1] * 768  # 模拟768维向量
+            if self.embedding_model and query.strip():
+                # 使用真实的embedding模型
+                embedding = self.embedding_model.encode(
+                    query,
+                    normalize_embeddings=self.normalize
+                )
+                return embedding.tolist()
+            else:
+                # 使用模拟向量作为后备
+                logger.warning("嵌入模型未初始化或查询为空，使用模拟向量")
+                return [0.1] * 768  # 模拟768维向量
             
         except Exception as e:
             logger.error(f"查询编码失败: {str(e)}")

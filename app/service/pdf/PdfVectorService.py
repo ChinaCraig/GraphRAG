@@ -56,6 +56,11 @@ class PdfVectorService:
             model_name = self.model_config['embedding']['model_name']
             cache_dir = self.model_config['embedding']['cache_dir']
             
+            # 设置HuggingFace缓存目录环境变量
+            os.environ['HF_HOME'] = os.path.abspath(cache_dir)
+            os.environ['TRANSFORMERS_CACHE'] = os.path.abspath(cache_dir)
+            os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.abspath(cache_dir)
+            
             self.embedding_model = SentenceTransformer(
                 model_name,
                 cache_folder=cache_dir
