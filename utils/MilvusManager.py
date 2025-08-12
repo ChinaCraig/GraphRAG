@@ -442,6 +442,34 @@ class MilvusManager:
             self.logger.error(f"删除向量数据失败: {str(e)}")
             return False
     
+    def delete_by_document_id(self, document_id: int) -> bool:
+        """
+        按文档ID删除所有相关向量数据
+        
+        Args:
+            document_id: 文档ID
+            
+        Returns:
+            bool: 删除成功返回True
+        """
+        try:
+            # 先查询有多少条记录
+            count_expr = f"document_id == {document_id}"
+            
+            # 执行删除
+            self.collection.delete(count_expr)
+            self.collection.flush()
+            
+            self.logger.info(f"文档ID {document_id} 的所有向量数据删除成功")
+            return True
+            
+        except MilvusException as e:
+            self.logger.error(f"删除文档ID {document_id} 的向量数据失败: {str(e)}")
+            return False
+        except Exception as e:
+            self.logger.error(f"删除文档向量数据时发生未知错误: {str(e)}")
+            return False
+    
     def get_collection_stats(self) -> Dict[str, Any]:
         """
         获取集合统计信息

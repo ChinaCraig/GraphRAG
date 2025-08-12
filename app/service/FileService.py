@@ -538,9 +538,162 @@ class FileService:
         
         return progress_map.get(status, {'progress': 0, 'stage': 'unknown', 'stage_name': '未知状态'})
     
+    def _delete_processed_files(self, file_id: int, original_filename: str) -> Dict[str, bool]:
+        """
+        删除处理过程中生成的文件
+        
+        Args:
+            file_id: 文件ID
+            original_filename: 原始文件名
+            
+        Returns:
+            Dict[str, bool]: 各类文件删除结果
+        """
+        results = {
+            'json_files': False,
+            'bm25_files': False,
+            'figure_files': False
+        }
+        
+        try:
+            upload_folder = self.file_config['upload_folder']
+            
+            # 1. 删除JSON文件
+            json_dir = os.path.join(upload_folder, 'json')
+            if os.path.exists(json_dir):
+                # 可能的JSON文件名模式
+                base_name = os.path.splitext(original_filename)[0]
+                json_patterns = [
+                    f"{base_name}_doc_{file_id}.json",
+                    f"*_doc_{file_id}.json"
+                ]
+                
+                json_deleted = 0
+                for pattern in json_patterns:
+                    if '*' in pattern:
+                        import glob
+                        matching_files = glob.glob(os.path.join(json_dir, pattern))
+                        for file_path in matching_files:
+                            try:
+                                os.remove(file_path)
+                                json_deleted += 1
+                                self.logger.info(f"删除JSON文件: {file_path}")
+                            except Exception as e:
+                                self.logger.warning(f"删除JSON文件失败: {file_path}, 错误: {e}")
+                    else:
+                        file_path = os.path.join(json_dir, pattern)
+                        if os.path.exists(file_path):
+                            try:
+                                os.remove(file_path)
+                                json_deleted += 1
+                                self.logger.info(f"删除JSON文件: {file_path}")
+                            except Exception as e:
+                                self.logger.warning(f"删除JSON文件失败: {file_path}, 错误: {e}")
+                
+                results['json_files'] = json_deleted > 0
+            
+            # 2. 删除BM25索引文件
+            bm25_dir = os.path.join(upload_folder, 'bm25')
+            if os.path.exists(bm25_dir):
+                import glob
+                # BM25文件名模式: bm25_*_{file_id}.json
+                bm25_patterns = [
+                    f"bm25_*_{file_id}.json",
+                    f"bm25_combined_{file_id}.json",
+                    f"bm25_sections_{file_id}.json", 
+                    f"bm25_fragments_{file_id}.json"
+                ]
+                
+                bm25_deleted = 0
+                for pattern in bm25_patterns:
+                    matching_files = glob.glob(os.path.join(bm25_dir, pattern))
+                    for file_path in matching_files:
+                        try:
+                            os.remove(file_path)
+                            bm25_deleted += 1
+                            self.logger.info(f"删除BM25文件: {file_path}")
+                        except Exception as e:
+                            self.logger.warning(f"删除BM25文件失败: {file_path}, 错误: {e}")
+                
+                results['bm25_files'] = bm25_deleted > 0
+            
+            # 3. 删除提取的图片文件
+            # 修复：figures目录在项目根目录，不在upload目录下
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            figures_dir = os.path.join(project_root, 'figures')
+            
+            figure_deleted = 0
+            
+            # 方法1：通过MySQL figures表精确查找图片路径
+            try:
+                # 查询该文档相关的所有图片路径
+                query = """
+                SELECT DISTINCT f.image_path 
+                FROM figures f 
+                JOIN sections s ON f.section_id = s.section_id 
+                WHERE s.document_id = :doc_id AND f.image_path IS NOT NULL AND f.image_path != ''
+                """
+                
+                figure_records = self.mysql_manager.fetch_all(query, {'doc_id': file_id})
+                
+                for record in figure_records:
+                    image_path = record.get('image_path', '')
+                    if image_path:
+                        # 构建完整路径
+                        if image_path.startswith('figures/'):
+                            full_path = os.path.join(project_root, image_path)
+                        else:
+                            # 如果路径不以figures/开头，假设它是相对于figures目录的
+                            full_path = os.path.join(figures_dir, os.path.basename(image_path))
+                        
+                        if os.path.exists(full_path):
+                            try:
+                                os.remove(full_path)
+                                figure_deleted += 1
+                                self.logger.info(f"通过MySQL记录删除图片文件: {full_path}")
+                            except Exception as e:
+                                self.logger.warning(f"删除图片文件失败: {full_path}, 错误: {e}")
+                
+            except Exception as e:
+                self.logger.warning(f"通过MySQL查找图片文件失败: {e}")
+            
+            # 方法2：模式匹配删除（作为备用方案）
+            if os.path.exists(figures_dir):
+                import glob
+                # 基于文件名模式的删除（作为备用方案）
+                figure_patterns = [
+                    f"*{file_id}*",           # 直接包含ID
+                    f"*_{file_id}_*",         # ID前后有下划线
+                    f"figure-{file_id}-*",    # figure-ID-序号 格式
+                    f"*doc_{file_id}*"        # 包含doc_ID的格式
+                ]
+                
+                pattern_deleted = 0
+                for pattern in figure_patterns:
+                    matching_files = glob.glob(os.path.join(figures_dir, pattern))
+                    for file_path in matching_files:
+                        try:
+                            os.remove(file_path)
+                            pattern_deleted += 1
+                            self.logger.info(f"通过模式匹配删除图片文件: {file_path}")
+                        except Exception as e:
+                            self.logger.warning(f"删除图片文件失败: {file_path}, 错误: {e}")
+                
+                figure_deleted += pattern_deleted
+                
+            results['figure_files'] = figure_deleted > 0
+            self.logger.info(f"figures目录路径: {figures_dir}, 删除图片总数: {figure_deleted}")
+            
+            self.logger.info(f"文件清理完成，文档ID: {file_id}, 结果: {results}")
+            
+        except Exception as e:
+            self.logger.error(f"清理处理文件时发生错误: {str(e)}")
+        
+        return results
+    
     def delete_file(self, file_id: int) -> bool:
         """
-        删除文件
+        完整删除文件及其所有相关数据
         
         Args:
             file_id: 文件ID
@@ -552,27 +705,100 @@ class FileService:
             # 获取文件信息
             file_info = self.get_file_info(file_id)
             if not file_info:
+                self.logger.warning(f"文件不存在，ID: {file_id}")
                 return False
             
-            # 删除物理文件
-            if os.path.exists(file_info['file_path']):
-                os.remove(file_info['file_path'])
-                self.logger.info(f"删除物理文件: {file_info['file_path']}")
+            self.logger.info(f"开始删除文件：{file_info['filename']} (ID: {file_id})")
             
-            # 删除数据库记录
-            success = self.mysql_manager.delete_data(
-                'documents',
-                'id = :file_id',
-                {'file_id': file_id}
-            )
+            # 记录删除过程中的错误，但不中断删除过程
+            deletion_errors = []
+            success_count = 0
+            total_operations = 6
             
-            if success:
-                self.logger.info(f"文件删除成功，ID: {file_id}")
+            # 1. 删除Milvus向量数据
+            try:
+                from utils.MilvusManager import MilvusManager
+                milvus_manager = MilvusManager()
+                if milvus_manager.delete_by_document_id(file_id):
+                    success_count += 1
+                    self.logger.info(f"✓ Milvus向量数据删除成功")
+                else:
+                    deletion_errors.append("Milvus向量数据删除失败")
+            except Exception as e:
+                deletion_errors.append(f"Milvus向量数据删除异常: {str(e)}")
+                self.logger.warning(f"Milvus向量数据删除异常: {str(e)}")
             
-            return success
+            # 2. 删除Neo4j图数据
+            try:
+                from utils.Neo4jManager import Neo4jManager
+                neo4j_manager = Neo4jManager()
+                if neo4j_manager.delete_document_data(file_id):
+                    success_count += 1
+                    self.logger.info(f"✓ Neo4j图数据删除成功")
+                else:
+                    deletion_errors.append("Neo4j图数据删除失败")
+            except Exception as e:
+                deletion_errors.append(f"Neo4j图数据删除异常: {str(e)}")
+                self.logger.warning(f"Neo4j图数据删除异常: {str(e)}")
+            
+            # 3. 删除处理过程中生成的文件（JSON、BM25、图片等）
+            try:
+                file_deletion_results = self._delete_processed_files(file_id, file_info['filename'])
+                if any(file_deletion_results.values()):
+                    success_count += 1
+                    self.logger.info(f"✓ 处理文件删除成功: {file_deletion_results}")
+                else:
+                    self.logger.info("没有找到需要删除的处理文件")
+                    success_count += 1  # 没有文件也算成功
+            except Exception as e:
+                deletion_errors.append(f"处理文件删除异常: {str(e)}")
+                self.logger.warning(f"处理文件删除异常: {str(e)}")
+            
+            # 4. 删除原始物理文件
+            try:
+                if os.path.exists(file_info['file_path']):
+                    os.remove(file_info['file_path'])
+                    success_count += 1
+                    self.logger.info(f"✓ 原始文件删除成功: {file_info['file_path']}")
+                else:
+                    self.logger.info("原始文件不存在，跳过删除")
+                    success_count += 1  # 文件不存在也算成功
+            except Exception as e:
+                deletion_errors.append(f"原始文件删除失败: {str(e)}")
+                self.logger.warning(f"原始文件删除失败: {str(e)}")
+            
+            # 5. 删除MySQL数据库记录（这会触发级联删除）
+            try:
+                mysql_success = self.mysql_manager.delete_data(
+                    'documents',
+                    'id = :file_id',
+                    {'file_id': file_id}
+                )
+                if mysql_success:
+                    success_count += 1
+                    self.logger.info(f"✓ MySQL数据删除成功（包括级联删除sections、figures、tables、table_rows）")
+                else:
+                    deletion_errors.append("MySQL数据删除失败")
+            except Exception as e:
+                deletion_errors.append(f"MySQL数据删除异常: {str(e)}")
+                self.logger.warning(f"MySQL数据删除异常: {str(e)}")
+            
+            # 6. 记录操作日志（这已经通过数据库触发器自动记录了）
+            success_count += 1
+            
+            # 评估删除结果
+            if success_count >= 4:  # 至少完成核心删除操作
+                self.logger.info(f"文件删除成功，ID: {file_id}, 成功操作: {success_count}/{total_operations}")
+                if deletion_errors:
+                    self.logger.warning(f"删除过程中的警告: {'; '.join(deletion_errors)}")
+                return True
+            else:
+                self.logger.error(f"文件删除失败，ID: {file_id}, 成功操作: {success_count}/{total_operations}")
+                self.logger.error(f"删除错误: {'; '.join(deletion_errors)}")
+                return False
             
         except Exception as e:
-            self.logger.error(f"删除文件失败: {str(e)}")
+            self.logger.error(f"删除文件过程中发生严重错误: {str(e)}")
             return False
     
     def get_file_stats(self) -> Dict[str, Any]:
