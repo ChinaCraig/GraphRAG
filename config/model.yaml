@@ -40,6 +40,25 @@ query_optimization:
   cache_optimization_results: false                   # 是否缓存优化结果（暂未实现）
   log_optimization_details: true                     # 是否记录优化详情到日志
 
+# 重排模型配置
+reranker:
+  enabled: true                                      # 是否启用重排模型（已下载，可以启用）
+  model_name: "BAAI/bge-reranker-large"              # 重排模型名称（推荐BGE重排模型）
+  device: "cpu"                                      # 使用设备(cpu/cuda)
+  batch_size: 16                                     # 批处理大小
+  max_length: 512                                    # 最大输入长度
+  cache_dir: "./models"                              # 模型缓存目录
+  top_k: 100                                         # 重排前候选数量
+  output_k: 20                                       # 重排后输出数量
+  
+  # 重排策略配置
+  strategy:
+    enable_cross_encoder: true                       # 是否启用Cross-Encoder重排
+    enable_diversity_control: true                   # 是否启用多样性控制(MMR)
+    enable_content_filtering: true                   # 是否启用内容过滤
+    diversity_lambda: 0.5                           # MMR多样性参数(0-1)
+    similarity_threshold: 0.9                       # 去重相似度阈值
+
 # 模型通用配置
 general:
   model_cache_size: 100                               # 模型缓存大小(MB)

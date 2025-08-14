@@ -66,10 +66,25 @@ class SearchFormatService:
     
     def _init_bm25_client(self):
         """初始化BM25检索客户端"""
-        # 这里应该连接到ElasticSearch或其他全文索引
-        # 目前返回None，使用模拟数据
-        logger.warning("BM25客户端未配置，将使用模拟数据")
-        return None
+        try:
+            # 连接OpenSearch全文检索
+            from utils.OpenSearchManager import OpenSearchManager
+            
+            opensearch_config = self.db_config.get('opensearch', {})
+            if opensearch_config:
+                bm25_client = OpenSearchManager()
+                # 确保索引存在
+                bm25_client.create_index()
+                logger.info("OpenSearch BM25客户端初始化成功")
+                return bm25_client
+            else:
+                logger.warning("OpenSearch配置未找到，将使用模拟数据")
+                return None
+                
+        except Exception as e:
+            logger.error(f"OpenSearch客户端初始化失败: {str(e)}")
+            logger.warning("降级使用模拟数据")
+            return None
     
     def _init_vector_client(self):
         """初始化向量检索客户端"""
@@ -79,11 +94,8 @@ class SearchFormatService:
             
             milvus_config = self.db_config.get('milvus', {})
             if milvus_config:
-                return MilvusManager(
-                    host=milvus_config.get('host', 'localhost'),
-                    port=milvus_config.get('port', 19530),
-                    collection_name=milvus_config.get('collection', 'documents')
-                )
+                # MilvusManager使用配置文件初始化，不需要传递参数
+                return MilvusManager()
             else:
                 logger.warning("Milvus配置未找到，将使用模拟数据")
                 return None
@@ -118,14 +130,35 @@ class SearchFormatService:
     def _init_reranker(self):
         """初始化重排模型"""
         try:
-            # 这里应该加载重排模型，如bge-reranker-large
-            # 目前使用简单的评分函数替代
-            logger.warning("重排模型未配置，将使用简单评分函数")
-            self.reranker = None
+            reranker_config = self.model_config.get('reranker', {})
+            
+            if reranker_config.get('enabled', False):
+                model_name = reranker_config.get('model_name', 'BAAI/bge-reranker-large')
+                cache_dir = reranker_config.get('cache_dir', './models')
+                device = reranker_config.get('device', 'cpu')
+                
+                # 设置环境变量
+                os.environ['HF_HOME'] = os.path.abspath(cache_dir)
+                os.environ['TRANSFORMERS_CACHE'] = os.path.abspath(cache_dir)
+                
+                # 加载重排模型 - CrossEncoder不支持cache_folder参数
+                from sentence_transformers import CrossEncoder
+                self.reranker = CrossEncoder(model_name, device=device)
+                
+                # 保存配置参数
+                self.reranker_config = reranker_config
+                
+                logger.info(f"重排模型初始化成功: {model_name}")
+            else:
+                logger.warning("重排模型未配置，将使用简单评分函数")
+                self.reranker = None
+                self.reranker_config = {}
             
         except Exception as e:
             logger.error(f"重排模型初始化失败: {str(e)}")
+            logger.warning("降级使用简单评分函数")
             self.reranker = None
+            self.reranker_config = {}
         
         # 初始化嵌入模型用于查询编码
         self._init_embedding_model()
@@ -224,9 +257,9 @@ class SearchFormatService:
             expanded_synonyms = rewrite_result.get("expanded_synonyms", [])
             
             if self.bm25_client:
-                # 使用真实的BM25客户端
-                query = self._build_bm25_query(keywords, expanded_synonyms, filters)
-                results = self.bm25_client.search(query)
+                # 使用OpenSearch BM25检索
+                query_text = self._build_query_text(keywords, expanded_synonyms)
+                results = self.bm25_client.search_bm25(query_text, filters, size=50)
             else:
                 # 使用模拟数据
                 results = self._mock_bm25_search(keywords, filters)
@@ -237,6 +270,33 @@ class SearchFormatService:
         except Exception as e:
             logger.error(f"BM25检索失败: {str(e)}")
             return []
+    
+    def _build_query_text(self, keywords: List[str], synonyms: List[str]) -> str:
+        """
+        构建查询文本
+        
+        Args:
+            keywords: 关键词列表
+            synonyms: 同义词列表
+            
+        Returns:
+            str: 组合的查询文本
+        """
+        query_parts = []
+        
+        # 添加关键词（高优先级）
+        if keywords:
+            query_parts.extend(keywords)
+        
+        # 添加同义词（扩展检索）
+        if synonyms:
+            query_parts.extend(synonyms)
+        
+        # 组合成查询文本
+        query_text = " ".join(query_parts) if query_parts else ""
+        
+        logger.debug(f"构建BM25查询文本: {query_text}")
+        return query_text
     
     def _build_bm25_query(self, keywords: List[str], synonyms: List[str], filters: Dict = None) -> Dict:
         """构建BM25查询"""
@@ -349,24 +409,47 @@ class SearchFormatService:
         standardized = []
         
         for result in results:
-            standardized.append({
-                "doc_id": result.get("doc_id", ""),
-                "chunk_id": result.get("chunk_id", ""),
-                "title": result.get("title", ""),
-                "content": result.get("content", ""),
-                "file_type": result.get("file_type", ""),
-                "page_no": result.get("page_no", 1),
-                "bbox": result.get("bbox", []),
-                "score": result.get("score", 0.0),
-                "source": "bm25",
-                "highlight": result.get("highlight", []),
-                "metadata": {
-                    "content_type": result.get("content_type", "text"),
-                    "timestamp": result.get("timestamp", ""),
-                    "department": result.get("department", ""),
-                    "original_score": result.get("score", 0.0)
+            # 处理OpenSearch返回的结果格式
+            if result.get("source") == "bm25":
+                # 已经是OpenSearch标准化格式
+                standardized_result = {
+                    "doc_id": result.get("doc_id", ""),
+                    "section_id": result.get("section_id", ""),
+                    "title": result.get("title", ""),
+                    "content": result.get("content", ""),
+                    "summary": result.get("summary", ""),
+                    "doc_type": result.get("doc_type", ""),
+                    "page_number": result.get("page_number", 1),
+                    "file_path": result.get("file_path", ""),
+                    "score": result.get("score", 0.0),
+                    "source": "bm25",
+                    "highlight": result.get("highlight", {}),
+                    "metadata": result.get("metadata", {})
                 }
-            })
+            else:
+                # 处理模拟数据格式
+                standardized_result = {
+                    "doc_id": result.get("doc_id", ""),
+                    "section_id": result.get("chunk_id", ""),  # 兼容旧格式
+                    "title": result.get("title", ""),
+                    "content": result.get("content", ""),
+                    "summary": "",
+                    "doc_type": result.get("file_type", ""),
+                    "page_number": result.get("page_no", 1),
+                    "file_path": "",
+                    "score": result.get("score", 0.0),
+                    "source": "bm25",
+                    "highlight": result.get("highlight", []),
+                    "metadata": {
+                        "content_type": result.get("content_type", "text"),
+                        "timestamp": result.get("timestamp", ""),
+                        "department": result.get("department", ""),
+                        "original_score": result.get("score", 0.0),
+                        "bbox": result.get("bbox", [])
+                    }
+                }
+            
+            standardized.append(standardized_result)
         
         return standardized
     
@@ -803,11 +886,63 @@ class SearchFormatService:
             return merged_results[:20]
     
     def _cross_encoder_rerank(self, results: List[Dict], understanding_result: Dict) -> List[Dict]:
-        """Cross-Encoder重排（模拟实现）"""
+        """Cross-Encoder重排（支持真实重排模型和模拟实现）"""
         original_query = understanding_result.get("original_query", "")
         
+        if self.reranker is not None:
+            # 使用真实的Cross-Encoder重排模型
+            return self._real_cross_encoder_rerank(results, original_query)
+        else:
+            # 使用简单评分函数（模拟实现）
+            return self._simple_rerank(results, original_query)
+    
+    def _real_cross_encoder_rerank(self, results: List[Dict], query: str) -> List[Dict]:
+        """使用真实的Cross-Encoder重排模型"""
+        try:
+            if not results:
+                return results
+            
+            # 准备query-document对
+            query_doc_pairs = []
+            for result in results:
+                content = result.get("content", "")
+                title = result.get("title", "")
+                
+                # 组合标题和内容作为文档
+                doc_text = f"{title} {content}" if title else content
+                doc_text = doc_text[:self.reranker_config.get('max_length', 512)]
+                
+                query_doc_pairs.append([query, doc_text])
+            
+            # 批量计算重排分数
+            batch_size = self.reranker_config.get('batch_size', 16)
+            rerank_scores = []
+            
+            for i in range(0, len(query_doc_pairs), batch_size):
+                batch = query_doc_pairs[i:i+batch_size]
+                batch_scores = self.reranker.predict(batch)
+                rerank_scores.extend(batch_scores)
+            
+            # 更新结果分数
+            for i, result in enumerate(results):
+                result["rerank_score"] = float(rerank_scores[i])
+                # 结合原分数：70%原分数 + 30%重排分数
+                original_score = result.get("final_score", 0)
+                result["final_score"] = original_score * 0.7 + result["rerank_score"] * 0.3
+            
+            # 按重排后分数排序
+            results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+            
+            logger.info(f"Cross-Encoder重排完成，处理了{len(results)}个候选结果")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Cross-Encoder重排失败，降级为简单评分: {str(e)}")
+            return self._simple_rerank(results, query)
+    
+    def _simple_rerank(self, results: List[Dict], query: str) -> List[Dict]:
+        """简单评分函数（模拟Cross-Encoder）"""
         for result in results:
-            # 模拟Cross-Encoder评分
             content = result.get("content", "")
             title = result.get("title", "")
             
@@ -815,11 +950,11 @@ class SearchFormatService:
             rerank_score = 0.0
             
             # 标题匹配加分
-            if any(word in title.lower() for word in original_query.lower().split()):
+            if any(word in title.lower() for word in query.lower().split()):
                 rerank_score += 0.3
             
             # 内容匹配加分
-            query_words = set(original_query.lower().split())
+            query_words = set(query.lower().split())
             content_words = set(content.lower().split())
             overlap = len(query_words.intersection(content_words))
             rerank_score += overlap * 0.1

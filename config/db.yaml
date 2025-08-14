@@ -3,10 +3,10 @@
 
 # MySQL数据库配置
 mysql:
-  host: "192.168.16.26"        # MySQL服务器地址
+  host: "localhost"        # MySQL服务器地址
   port: 3306                   # MySQL服务器端口
   username: "root"             # MySQL用户名
-  password: "!200808Xx"        # MySQL密码
+  password: "zhang"        # MySQL密码
   database: "graph_rag"        # 数据库名称
   charset: "utf8mb4"           # 字符集
   pool_size: 10                # 连接池大小
@@ -17,7 +17,7 @@ mysql:
 
 # Milvus向量数据库配置
 milvus:
-  host: "192.168.16.26"        # Milvus服务器地址
+  host: "172.20.10.10"        # Milvus服务器地址
   port: 19530                  # Milvus服务器端口
   database: "graph_rag"        # Milvus数据库名称
   collection: "graph_rag"      # Milvus集合名称
@@ -29,11 +29,53 @@ milvus:
 
 # Neo4j图数据库配置
 neo4j:
-  uri: "bolt://192.168.16.26:7687"  # Neo4j连接URI
+  uri: "bolt://localhost:7687"  # Neo4j连接URI
   username: "neo4j"                 # Neo4j用户名
-  password: "!200808Xx"            # Neo4j密码
+  password: "zhang123456"            # Neo4j密码
   database: "neo4j"                # Neo4j数据库名称
   max_connection_lifetime: 3600     # 连接最大生存时间(秒)
   max_connection_pool_size: 50      # 连接池最大大小
   connection_timeout: 30            # 连接超时时间(秒)
   trust: "TRUST_ALL_CERTIFICATES"   # 证书信任策略
+
+# OpenSearch全文检索配置
+opensearch:
+  host: "localhost"                   # OpenSearch服务器地址
+  port: 9200                         # OpenSearch服务器端口
+  username: "admin"                   # OpenSearch用户名
+  password: "Zhang123456!"            # OpenSearch密码
+  use_ssl: true                       # 是否使用SSL(OpenSearch默认启用)
+  verify_certs: false                 # 是否验证SSL证书
+  ssl_show_warn: false               # 是否显示SSL警告
+  index_name: "graphrag_documents"    # 文档索引名称
+  timeout: 30                         # 连接超时时间(秒)
+  max_retries: 3                      # 最大重试次数
+  
+  # 索引配置
+  index_settings:
+    number_of_shards: 1               # 分片数量
+    number_of_replicas: 0             # 副本数量
+    refresh_interval: "1s"            # 刷新间隔
+    
+  # BM25检索配置  
+  search_settings:
+    default_size: 50                  # 默认返回结果数量
+    max_size: 100                     # 最大返回结果数量
+    highlight_enabled: true           # 是否启用高亮
+    track_total_hits: true            # 是否跟踪总命中数
+    
+    # BM25参数调优
+    bm25_k1: 1.2                     # BM25 k1参数(词频饱和点)
+    bm25_b: 0.75                     # BM25 b参数(字段长度归一化)
+    
+    # 字段权重配置
+    field_weights:
+      title: 3.0                     # 标题字段权重
+      content: 1.0                   # 内容字段权重
+      summary: 2.0                   # 摘要字段权重
+      
+  # 批量操作配置
+  bulk_settings:
+    batch_size: 100                   # 批量操作大小
+    timeout: "60s"                    # 批量操作超时时间
+    refresh: false                    # 是否立即刷新索引
