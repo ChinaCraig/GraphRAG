@@ -1,9 +1,8 @@
 """
 OpenSearch管理器
-负责OpenSearch连接、索引管理和BM25检索功能
+负责OpenSearch连接和基础操作
 """
 
-import json
 import logging
 import yaml
 from typing import Dict, List, Optional, Any
@@ -15,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class OpenSearchManager:
-    """OpenSearch管理器类"""
+    """OpenSearch管理器类 - 只负责连接和基础操作"""
     
     def __init__(self, config_path: str = 'config/db.yaml'):
         """
@@ -72,99 +71,22 @@ class OpenSearchManager:
             logger.error(f"OpenSearch客户端初始化失败: {str(e)}")
             raise
     
-    def create_index(self) -> bool:
+    def create_index(self, index_name: str, mapping: Dict[str, Any]) -> bool:
         """
-        创建文档索引
+        创建索引
         
+        Args:
+            index_name: 索引名称
+            mapping: 索引映射配置
+            
         Returns:
             bool: 创建是否成功
         """
         try:
-            index_name = self.config['index_name']
-            
             # 检查索引是否已存在
             if self.client.indices.exists(index=index_name):
                 logger.info(f"索引 {index_name} 已存在")
                 return True
-            
-            # 构建索引映射
-            mapping = {
-                "settings": {
-                    "number_of_shards": self.config['index_settings']['number_of_shards'],
-                    "number_of_replicas": self.config['index_settings']['number_of_replicas'],
-                    "refresh_interval": self.config['index_settings']['refresh_interval'],
-                    "analysis": {
-                        "analyzer": {
-                            "multilingual_analyzer": {
-                                "type": "custom",
-                                "tokenizer": "standard",
-                                "filter": ["lowercase", "stop", "cjk_width"]
-                            }
-                        }
-                    },
-                    "similarity": {
-                        "custom_bm25": {
-                            "type": "BM25",
-                            "k1": self.config['search_settings']['bm25_k1'],
-                            "b": self.config['search_settings']['bm25_b']
-                        }
-                    }
-                },
-                "mappings": {
-                    "properties": {
-                        "doc_id": {
-                            "type": "keyword"
-                        },
-                        "section_id": {
-                            "type": "keyword"
-                        },
-                        "title": {
-                            "type": "text",
-                            "analyzer": "multilingual_analyzer",
-                            "search_analyzer": "multilingual_analyzer",
-                            "similarity": "custom_bm25",
-                            "fields": {
-                                "keyword": {
-                                    "type": "keyword"
-                                }
-                            }
-                        },
-                        "content": {
-                            "type": "text",
-                            "analyzer": "multilingual_analyzer", 
-                            "search_analyzer": "multilingual_analyzer",
-                            "similarity": "custom_bm25"
-                        },
-                        "summary": {
-                            "type": "text",
-                            "analyzer": "multilingual_analyzer",
-                            "search_analyzer": "multilingual_analyzer", 
-                            "similarity": "custom_bm25"
-                        },
-                        "doc_type": {
-                            "type": "keyword"
-                        },
-                        "page_number": {
-                            "type": "integer"
-                        },
-                        "created_time": {
-                            "type": "date",
-                            "format": "yyyy-MM-dd HH:mm:ss||yyyy-MM-dd||epoch_millis"
-                        },
-                        "updated_time": {
-                            "type": "date",
-                            "format": "yyyy-MM-dd HH:mm:ss||yyyy-MM-dd||epoch_millis"
-                        },
-                        "file_path": {
-                            "type": "keyword"
-                        },
-                        "metadata": {
-                            "type": "object",
-                            "dynamic": True
-                        }
-                    }
-                }
-            }
             
             # 创建索引
             response = self.client.indices.create(
@@ -186,11 +108,12 @@ class OpenSearchManager:
             logger.error(f"创建索引失败: {str(e)}")
             return False
     
-    def index_document(self, doc_id: str, document: Dict[str, Any]) -> bool:
+    def index_document(self, index_name: str, doc_id: str, document: Dict[str, Any]) -> bool:
         """
         索引单个文档
         
         Args:
+            index_name: 索引名称
             doc_id: 文档ID
             document: 文档内容
             
@@ -198,8 +121,6 @@ class OpenSearchManager:
             bool: 索引是否成功
         """
         try:
-            index_name = self.config['index_name']
-            
             # 添加时间戳
             document['updated_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
@@ -217,18 +138,23 @@ class OpenSearchManager:
             logger.error(f"索引文档失败 {doc_id}: {str(e)}")
             return False
     
-    def bulk_index_documents(self, documents: List[Dict[str, Any]]) -> bool:
+    def bulk_index_documents(self, index_name: str, documents: List[Dict[str, Any]], 
+                           timeout = 60, refresh: bool = False) -> bool:
         """
         批量索引文档
         
         Args:
+            index_name: 索引名称
             documents: 文档列表，每个文档需包含_id字段
+            timeout: 超时时间（秒，可以是int、float或字符串如'60s'）
+            refresh: 是否立即刷新
             
         Returns:
             bool: 批量索引是否成功
         """
         try:
-            index_name = self.config['index_name']
+            # 解析超时时间
+            parsed_timeout = self._parse_timeout(timeout)
             
             # 构建批量操作
             bulk_data = []
@@ -248,8 +174,8 @@ class OpenSearchManager:
             # 执行批量操作
             response = self.client.bulk(
                 body=bulk_data,
-                timeout=self.config['bulk_settings']['timeout'],
-                refresh=self.config['bulk_settings']['refresh']
+                timeout=parsed_timeout,
+                refresh=refresh
             )
             
             # 检查错误
@@ -270,164 +196,40 @@ class OpenSearchManager:
             logger.error(f"批量索引失败: {str(e)}")
             return False
     
-    def search_bm25(self, query: str, filters: Optional[Dict] = None, size: int = 50) -> List[Dict]:
+    def search(self, index_name: str, query_body: Dict[str, Any]) -> Optional[Dict]:
         """
-        BM25检索
+        执行搜索查询
         
         Args:
-            query: 查询字符串
-            filters: 过滤条件
-            size: 返回结果数量
+            index_name: 索引名称
+            query_body: 查询体
             
         Returns:
-            List[Dict]: 检索结果列表
+            Optional[Dict]: 搜索结果
         """
         try:
-            index_name = self.config['index_name']
-            search_config = self.config['search_settings']
-            
-            # 限制返回数量
-            size = min(size, search_config['max_size'])
-            
-            # 构建多字段查询
-            field_weights = search_config['field_weights']
-            should_queries = []
-            
-            # 标题字段查询（高权重）
-            should_queries.append({
-                "match": {
-                    "title": {
-                        "query": query,
-                        "boost": field_weights['title']
-                    }
-                }
-            })
-            
-            # 内容字段查询
-            should_queries.append({
-                "match": {
-                    "content": {
-                        "query": query,
-                        "boost": field_weights['content']
-                    }
-                }
-            })
-            
-            # 摘要字段查询（中权重）
-            should_queries.append({
-                "match": {
-                    "summary": {
-                        "query": query,
-                        "boost": field_weights['summary']
-                    }
-                }
-            })
-            
-            # 短语匹配（精确匹配加分）
-            should_queries.append({
-                "multi_match": {
-                    "query": query,
-                    "type": "phrase",
-                    "fields": ["title^2", "content", "summary^1.5"],
-                    "boost": 1.5
-                }
-            })
-            
-            # 构建查询体
-            query_body = {
-                "query": {
-                    "bool": {
-                        "should": should_queries,
-                        "minimum_should_match": 1
-                    }
-                },
-                "size": size,
-                "track_total_hits": search_config['track_total_hits'],
-                "_source": {
-                    "includes": ["doc_id", "section_id", "title", "content", "summary", 
-                               "doc_type", "page_number", "file_path", "created_time"]
-                }
-            }
-            
-            # 添加过滤条件
-            if filters:
-                filter_conditions = []
-                
-                if filters.get('doc_types'):
-                    filter_conditions.append({
-                        "terms": {"doc_type": filters['doc_types']}
-                    })
-                
-                if filters.get('time_range'):
-                    start_time, end_time = filters['time_range']
-                    filter_conditions.append({
-                        "range": {
-                            "created_time": {
-                                "gte": start_time,
-                                "lte": end_time
-                            }
-                        }
-                    })
-                
-                if filter_conditions:
-                    query_body["query"]["bool"]["filter"] = filter_conditions
-            
-            # 添加高亮
-            if search_config['highlight_enabled']:
-                query_body["highlight"] = {
-                    "fields": {
-                        "title": {},
-                        "content": {"fragment_size": 100, "number_of_fragments": 3},
-                        "summary": {}
-                    },
-                    "pre_tags": ["<mark>"],
-                    "post_tags": ["</mark>"]
-                }
-            
-            # 执行搜索
             response = self.client.search(
                 index=index_name,
                 body=query_body
             )
-            
-            # 处理结果
-            results = []
-            for hit in response['hits']['hits']:
-                result = {
-                    'id': hit['_id'],
-                    'score': hit['_score'],
-                    'source': 'bm25',
-                    **hit['_source']
-                }
-                
-                # 添加高亮信息
-                if 'highlight' in hit:
-                    result['highlight'] = hit['highlight']
-                
-                results.append(result)
-            
-            total_hits = response['hits']['total']['value']
-            logger.info(f"BM25搜索完成: 查询='{query}', 总命中={total_hits}, 返回={len(results)}")
-            
-            return results
+            return response
             
         except Exception as e:
-            logger.error(f"BM25搜索失败: {str(e)}")
-            return []
+            logger.error(f"搜索失败: {str(e)}")
+            return None
     
-    def delete_document(self, doc_id: str) -> bool:
+    def delete_document(self, index_name: str, doc_id: str) -> bool:
         """
         删除文档
         
         Args:
+            index_name: 索引名称
             doc_id: 文档ID
             
         Returns:
             bool: 删除是否成功
         """
         try:
-            index_name = self.config['index_name']
-            
             response = self.client.delete(
                 index=index_name,
                 id=doc_id
@@ -443,16 +245,17 @@ class OpenSearchManager:
             logger.error(f"删除文档失败 {doc_id}: {str(e)}")
             return False
     
-    def refresh_index(self) -> bool:
+    def refresh_index(self, index_name: str) -> bool:
         """
         刷新索引
         
+        Args:
+            index_name: 索引名称
+            
         Returns:
             bool: 刷新是否成功
         """
         try:
-            index_name = self.config['index_name']
-            
             response = self.client.indices.refresh(index=index_name)
             logger.info(f"索引刷新成功: {response}")
             return True
@@ -461,16 +264,17 @@ class OpenSearchManager:
             logger.error(f"刷新索引失败: {str(e)}")
             return False
     
-    def get_index_stats(self) -> Optional[Dict]:
+    def get_index_stats(self, index_name: str) -> Optional[Dict]:
         """
         获取索引统计信息
         
+        Args:
+            index_name: 索引名称
+            
         Returns:
             Optional[Dict]: 索引统计信息
         """
         try:
-            index_name = self.config['index_name']
-            
             response = self.client.indices.stats(index=index_name)
             stats = response['indices'][index_name]['total']
             
@@ -485,6 +289,41 @@ class OpenSearchManager:
         except Exception as e:
             logger.error(f"获取索引统计失败: {str(e)}")
             return None
+    
+    def _parse_timeout(self, timeout) -> int:
+        """
+        解析超时时间为秒数
+        
+        Args:
+            timeout: 超时时间，可以是int、float或字符串（如'60s'、'1m'等）
+            
+        Returns:
+            int: 超时秒数
+        """
+        if isinstance(timeout, (int, float)):
+            return int(timeout)
+        
+        if isinstance(timeout, str):
+            import re
+            # 解析字符串格式的时间
+            match = re.match(r'^(\d+(?:\.\d+)?)([smh]?)$', timeout.lower())
+            if match:
+                value, unit = match.groups()
+                value = float(value)
+                
+                if unit == 'm':  # 分钟
+                    return int(value * 60)
+                elif unit == 'h':  # 小时
+                    return int(value * 3600)
+                else:  # 默认为秒
+                    return int(value)
+            else:
+                logger.warning(f"无法解析超时时间格式: {timeout}，使用默认值60秒")
+                return 60
+        
+        # 默认值
+        logger.warning(f"不支持的超时时间类型: {type(timeout)}，使用默认值60秒")
+        return 60
     
     def close(self) -> None:
         """关闭连接"""

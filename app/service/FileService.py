@@ -713,7 +713,7 @@ class FileService:
             # 记录删除过程中的错误，但不中断删除过程
             deletion_errors = []
             success_count = 0
-            total_operations = 6
+            total_operations = 7
             
             # 1. 删除Milvus向量数据
             try:
@@ -727,6 +727,19 @@ class FileService:
             except Exception as e:
                 deletion_errors.append(f"Milvus向量数据删除异常: {str(e)}")
                 self.logger.warning(f"Milvus向量数据删除异常: {str(e)}")
+            
+            # 1.5. 删除OpenSearch索引数据
+            try:
+                from app.service.pdf.PdfOpenSearchService import PdfOpenSearchService
+                opensearch_service = PdfOpenSearchService()
+                if opensearch_service.delete_document_from_opensearch(file_id):
+                    success_count += 1
+                    self.logger.info(f"✓ OpenSearch索引数据删除成功")
+                else:
+                    deletion_errors.append("OpenSearch索引数据删除失败")
+            except Exception as e:
+                deletion_errors.append(f"OpenSearch索引数据删除异常: {str(e)}")
+                self.logger.warning(f"OpenSearch索引数据删除异常: {str(e)}")
             
             # 2. 删除Neo4j图数据
             try:
@@ -886,14 +899,14 @@ class FileService:
             from app.service.pdf.PdfExtractService import PdfExtractService
             from app.service.pdf.PdfFormatElementsToJson import PdfFormatElementsToJson
             from app.service.pdf.PdfVectorService import PdfVectorService
-            from app.service.pdf.PdfBM25Service import PdfBM25Service
+            from app.service.pdf.PdfOpenSearchService import PdfOpenSearchService
             from app.service.pdf.PdfGraphService import PdfGraphService
             from app.service.pdf.PdfMysqlService import PdfMysqlService
             
             pdf_extract_service = PdfExtractService()
             pdf_format_service = PdfFormatElementsToJson()
             pdf_vector_service = PdfVectorService()
-            pdf_bm25_service = PdfBM25Service()
+            pdf_opensearch_service = PdfOpenSearchService()
             pdf_graph_service = PdfGraphService()
             pdf_mysql_service = PdfMysqlService()
             
@@ -942,19 +955,19 @@ class FileService:
             self.update_file_status(file_id, 'vectorized')
             self.logger.info(f"文件向量化完成，ID: {file_id}")
             
-            # 步骤2.1：倒排 (60% -> 70%)
+            # 步骤3：OpenSearch索引 (60% -> 70%)
             self.update_file_status(file_id, 'bm25_processing')
-            bm25_result = pdf_bm25_service.process_pdf_json_to_bm25(json_data, file_id)
+            opensearch_result = pdf_opensearch_service.process_pdf_json_to_opensearch(json_data, file_id)
             
-            if not bm25_result['success']:
+            if not opensearch_result['success']:
                 self.update_file_status(file_id, 'bm25_failed')
-                self.logger.error(f"BM25倒排处理失败，ID: {file_id}, 错误: {bm25_result['message']}")
+                self.logger.error(f"OpenSearch索引处理失败，ID: {file_id}, 错误: {opensearch_result['message']}")
                 return
                 
             self.update_file_status(file_id, 'bm25_completed')
-            self.logger.info(f"BM25倒排处理完成，ID: {file_id}")
+            self.logger.info(f"OpenSearch索引处理完成，ID: {file_id}")
             
-                        # 步骤3：知识图谱构建 (70% -> 85%)
+            # 步骤4：知识图谱构建 (70% -> 85%)
             self.update_file_status(file_id, 'graph_processing')
             graph_result = pdf_graph_service.process_pdf_json_to_graph(json_data, file_id)
             
@@ -966,7 +979,7 @@ class FileService:
             self.update_file_status(file_id, 'graph_completed')
             self.logger.info(f"知识图谱构建完成，ID: {file_id}")
             
-            # 步骤4：MySQL保存 (85% -> 100%)
+            # 步骤5：MySQL保存 (85% -> 100%)
             self.update_file_status(file_id, 'mysql_processing')
             mysql_result = pdf_mysql_service.process_pdf_json_to_mysql(json_data, file_id)
             

@@ -67,22 +67,20 @@ class SearchFormatService:
     def _init_bm25_client(self):
         """初始化BM25检索客户端"""
         try:
-            # 连接OpenSearch全文检索
-            from utils.OpenSearchManager import OpenSearchManager
+            # 使用专门的SearchOpenSearchService
+            from app.service.search.SearchOpenSearchService import SearchOpenSearchService
             
             opensearch_config = self.db_config.get('opensearch', {})
             if opensearch_config:
-                bm25_client = OpenSearchManager()
-                # 确保索引存在
-                bm25_client.create_index()
-                logger.info("OpenSearch BM25客户端初始化成功")
+                bm25_client = SearchOpenSearchService()
+                logger.info("SearchOpenSearchService BM25客户端初始化成功")
                 return bm25_client
             else:
                 logger.warning("OpenSearch配置未找到，将使用模拟数据")
                 return None
                 
         except Exception as e:
-            logger.error(f"OpenSearch客户端初始化失败: {str(e)}")
+            logger.error(f"SearchOpenSearchService客户端初始化失败: {str(e)}")
             logger.warning("降级使用模拟数据")
             return None
     
@@ -255,11 +253,17 @@ class SearchFormatService:
             rewrite_result = understanding_result.get("rewrite_result", {})
             keywords = rewrite_result.get("bm25_keywords", [])
             expanded_synonyms = rewrite_result.get("expanded_synonyms", [])
+            original_query = understanding_result.get("original_query", "")
             
             if self.bm25_client:
-                # 使用OpenSearch BM25检索
-                query_text = self._build_query_text(keywords, expanded_synonyms)
-                results = self.bm25_client.search_bm25(query_text, filters, size=50)
+                # 使用SearchOpenSearchService进行BM25检索
+                results = self.bm25_client.search_bm25(
+                    query=original_query,
+                    keywords=keywords,
+                    synonyms=expanded_synonyms,
+                    filters=filters,
+                    size=50
+                )
             else:
                 # 使用模拟数据
                 results = self._mock_bm25_search(keywords, filters)

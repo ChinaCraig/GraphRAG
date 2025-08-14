@@ -77,5 +77,5 @@ opensearch:
   # 批量操作配置
   bulk_settings:
     batch_size: 100                   # 批量操作大小
-    timeout: "60s"                    # 批量操作超时时间
+    timeout: "60s"                    # 批量操作超时时间(支持: 60, "60s", "1m", "1.5h"等格式)
     refresh: false                    # 是否立即刷新索引
