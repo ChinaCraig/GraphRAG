@@ -7,17 +7,13 @@ from .FileService import FileService
 
 # 导入搜索相关服务
 try:
-    from .search.SearchRouteService import SearchRouteService
-    from .search.SearchFormatService import SearchFormatService
-    from .search.SearchAnswerService import SearchAnswerService
+    from .search.SearchService import SearchService
     
     search_services_available = True
 except ImportError as e:
     print(f"搜索服务导入失败: {e}")
     search_services_available = False
-    SearchRouteService = None
-    SearchFormatService = None
-    SearchAnswerService = None
+    SearchService = None
 
 __all__ = [
     'FileService'
@@ -26,7 +22,5 @@ __all__ = [
 # 如果搜索服务可用，添加到导出列表
 if search_services_available:
     __all__.extend([
-        'SearchRouteService',
-        'SearchFormatService', 
-        'SearchAnswerService'
+        'SearchService'
     ])
