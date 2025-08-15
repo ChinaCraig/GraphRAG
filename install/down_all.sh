@@ -147,6 +147,11 @@ echo "📄 Unstructured模型:"
 grep "yolox" "$SCRIPTS_LIST" | while IFS='|' read -r num script_name model_name version; do
     printf "     - %s (v%s)\n" "$model_name" "$version"
 done
+
+echo "🧠 知识图谱模型:"
+grep -E "(bert-base-chinese|bge-reranker)" "$SCRIPTS_LIST" | while IFS='|' read -r num script_name model_name version; do
+    printf "     - %s (v%s)\n" "$model_name" "$version"
+done
 echo ""
 
 # 交互式选择(如果是交互式环境)
