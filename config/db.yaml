@@ -17,7 +17,7 @@ mysql:
 
 # Milvus向量数据库配置
 milvus:
-  host: "192.168.9.64"        # Milvus服务器地址
+  host: "172.20.10.10"        # Milvus服务器地址
   port: 19530                  # Milvus服务器端口
   database: "graph_rag"        # Milvus数据库名称
   collection: "graph_rag"      # Milvus集合名称

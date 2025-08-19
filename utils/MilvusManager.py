@@ -159,7 +159,7 @@ class MilvusManager:
                 FieldSchema(
                     name="element_id",
                     dtype=DataType.VARCHAR,
-                    max_length=50,
+                    max_length=100,  # 🔧 增加到100字符以支持长的section_id
                     description="一家子的唯一标识符（标题ID）"
                 ),
                 FieldSchema(
@@ -172,6 +172,13 @@ class MilvusManager:
                     dtype=DataType.VARCHAR,
                     max_length=65535,
                     description="文本内容"
+                ),
+                # 🔧 新增：独立的content_type字段，用于高效意图判别
+                FieldSchema(
+                    name="content_type",
+                    dtype=DataType.VARCHAR,
+                    max_length=20,
+                    description="内容类型：title/fragment/section/table/image"
                 ),
                 FieldSchema(
                     name="metadata",
@@ -230,7 +237,7 @@ class MilvusManager:
     def _check_collection_schema(self) -> bool:
         """
         检查集合schema是否匹配当前要求
-        主要检查字段是否完整，特别是新添加的element_id字段
+        主要检查字段是否完整，特别是新添加的content_type字段
         
         Returns:
             bool: True表示schema匹配，False表示不匹配
@@ -246,7 +253,7 @@ class MilvusManager:
             # 定义期望的字段列表
             expected_fields = [
                 "id", "vector", "document_id", "element_id", 
-                "chunk_index", "content", "metadata"
+                "chunk_index", "content", "content_type", "metadata"  # 🔧 新增content_type字段
             ]
             
             # 检查是否包含所有期望的字段
@@ -259,11 +266,11 @@ class MilvusManager:
                 self.logger.warning(f"集合缺少字段: {missing_fields}")
                 return False
             
-            # 特别检查element_id字段（新添加的字段）
+            # 特别检查element_id字段（🔧 修复：更新期望长度为100）
             if "element_id" in current_fields:
                 element_id_field = current_fields["element_id"]
                 if (element_id_field.dtype != DataType.VARCHAR or 
-                    element_id_field.params.get("max_length", 0) != 50):
+                    element_id_field.params.get("max_length", 0) != 100):
                     self.logger.warning("element_id字段类型或长度不匹配")
                     return False
             
@@ -300,7 +307,7 @@ class MilvusManager:
         插入向量数据
         
         Args:
-            data: 向量数据列表，每个元素包含id, vector, document_id, element_id, chunk_index, content, metadata
+            data: 向量数据列表，每个元素包含id, vector, document_id, element_id, chunk_index, content, content_type, metadata
             
         Returns:
             bool: 插入成功返回True
@@ -317,6 +324,7 @@ class MilvusManager:
             element_ids = []
             chunk_indices = []
             contents = []
+            content_types = []  # 🔧 新增：content_type字段
             metadatas = []
             
             for i, item in enumerate(data):
@@ -332,6 +340,21 @@ class MilvusManager:
                 element_ids.append(item["element_id"])
                 chunk_indices.append(item["chunk_index"])
                 contents.append(item["content"])
+                # 🔧 处理content_type字段，如果不存在则从metadata中提取
+                content_type = item.get("content_type")
+                if not content_type:
+                    # 向后兼容：从metadata中提取
+                    metadata = item.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        content_type = metadata.get("content_type", "fragment")
+                    else:
+                        # 如果metadata是字符串，尝试解析
+                        try:
+                            metadata_dict = json.loads(metadata)
+                            content_type = metadata_dict.get("content_type", "fragment")
+                        except:
+                            content_type = "fragment"
+                content_types.append(content_type)
                 metadatas.append(json.dumps(item.get("metadata", {}), ensure_ascii=False))
             
             # 使用实体列表方式插入（兼容性更好）
@@ -342,13 +365,15 @@ class MilvusManager:
                 element_ids,   # element_id字段
                 chunk_indices, # chunk_index字段
                 contents,      # content字段
+                content_types, # 🔧 新增：content_type字段
                 metadatas      # metadata字段
             ]
             
             # 调试：验证entities结构
-            self.logger.debug(f"entities长度: {len(entities)}")
+            self.logger.debug(f"entities长度: {len(entities)} (应该是8个字段)")
             self.logger.debug(f"id列表长度: {len(entities[0])}")
             self.logger.debug(f"前3个id: {entities[0][:3]}")
+            self.logger.debug(f"前3个content_type: {entities[6][:3]}")
             
             # 插入数据
             self.collection.insert(entities)

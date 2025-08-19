@@ -13,6 +13,7 @@ import os
 from typing import Dict, List, Optional, Generator, Any
 from datetime import datetime
 from collections import defaultdict
+from sqlalchemy import text
 import requests
 from time import sleep
 
@@ -57,6 +58,9 @@ class SearchService:
             
             # Neo4j图数据库客户端
             self._init_neo4j_client()
+            
+            # MySQL数据库客户端
+            self._init_mysql_client()
             
             # LLM客户端
             self._init_llm_client()
@@ -116,6 +120,21 @@ class SearchService:
         except Exception as e:
             logger.error(f"Neo4j客户端初始化失败: {str(e)}")
             self.neo4j_client = None
+    
+    def _init_mysql_client(self):
+        """初始化MySQL客户端"""
+        try:
+            from utils.MySQLManager import MySQLManager
+            mysql_config = self.db_config.get('mysql', {})
+            if mysql_config:
+                self.mysql_client = MySQLManager('config/db.yaml')
+                logger.info("MySQL客户端初始化成功")
+            else:
+                self.mysql_client = None
+                logger.warning("MySQL配置未找到")
+        except Exception as e:
+            logger.error(f"MySQL客户端初始化失败: {str(e)}")
+            self.mysql_client = None
     
     def _init_llm_client(self):
         """初始化LLM客户端"""
@@ -235,13 +254,13 @@ class SearchService:
             vector_results = self._vector_retrieval(understanding_result, filters)
             graph_results = self._graph_retrieval(understanding_result, filters)
             
-            # ④ 聚合与分数融合（到 section 粒度）
+            # ④ 意图感知的聚合与分数融合
             yield {"type": "stage_update", "stage": "aggregation", "message": "🔗 正在聚合和融合结果...", "progress": 55}
-            section_candidates = self._aggregate_by_section(bm25_results, vector_results, graph_results, understanding_result)
+            candidates = self._aggregate_by_section(bm25_results, vector_results, graph_results, understanding_result)
             
             # ⑤ 重排（把"最相关的一节"放到第一）
             yield {"type": "stage_update", "stage": "reranking", "message": "🎯 正在重排选择最佳章节...", "progress": 70}
-            top_section = self._rerank_sections(section_candidates, understanding_result)
+            top_section = self._rerank_sections(candidates, understanding_result)
             
             if not top_section:
                 yield {"type": "error", "message": "未找到相关内容"}
@@ -253,13 +272,16 @@ class SearchService:
             
             # ⑧ 图表细节（MySQL）
             yield {"type": "stage_update", "stage": "enrichment", "message": "🖼️ 正在补充图表细节...", "progress": 85}
-            enriched_content = self._enrich_multimodal_details(expanded_content)
+            multimodal_content = self._enrich_multimodal_details(top_section)
+            
+            # 🔧 合并文本内容和图表内容
+            full_content = expanded_content + multimodal_content
             
             # ⑨ 组装/渲染（可流式）
             yield {"type": "stage_update", "stage": "rendering", "message": "✍️ 正在生成答案...", "progress": 90}
             
             # 流式输出结果
-            yield from self._stream_render_answer(query, top_section, enriched_content, understanding_result)
+            yield from self._stream_render_answer(query, top_section, full_content, understanding_result)
             
         except Exception as e:
             logger.error(f"智能检索失败: {str(e)}")
@@ -308,22 +330,29 @@ class SearchService:
     def _classify_intent(self, query: str) -> str:
         """② 意图判别（标题问法 or 碎句问法）"""
         try:
-            # 规则1：长度≤8字且包含特定关键词 → 标题问法
-            if len(query) <= 8 and any(keyword in query for keyword in 
-                ["简介", "说明", "是什么", "定义", "产品说明", "概述", "介绍"]):
-                return "title"
+            # # 规则1：长度≤8字且包含特定关键词 → 标题问法
+            # if len(query) <= 8 and any(keyword in query for keyword in
+            #     ["简介", "说明", "是什么", "定义", "产品说明", "概述", "介绍"]):
+            #     return "title"
+            #
+            # # 🔧 规则2：包含明确的标题性查询词 → 标题问法 (扩展版)
+            # title_indicators = ["什么是", "定义", "概念", "简介", "概述", "介绍", "案例", "分享", "特点", "优势", "应用"]
+            # if any(indicator in query for indicator in title_indicators):
+            #     logger.info(f"意图判别：检测到标题性关键词 '{[ind for ind in title_indicators if ind in query]}' → title")
+            #     return "title"
+            #
+            # # 规则3：包含明确的内容性查询词 → 碎句问法
+            # content_indicators = ["如何", "怎么", "步骤", "流程", "方法", "过程", "具体", "详细"]
+            # if any(indicator in query for indicator in content_indicators):
+            #     return "fragment"
             
-            # 规则2：包含明确的标题性查询词 → 标题问法
-            title_indicators = ["什么是", "定义", "概念", "简介", "概述", "介绍"]
-            if any(indicator in query for indicator in title_indicators):
-                return "title"
+            # 🔧 规则4：基于向量数据库的意图判别（主要方法）
+            vector_intent = self._vector_based_intent_classification(query)
+            if vector_intent:
+                logger.info(f"意图判别：向量相似度分析 → {vector_intent}")
+                return vector_intent
             
-            # 规则3：包含明确的内容性查询词 → 碎句问法
-            content_indicators = ["如何", "怎么", "步骤", "流程", "方法", "过程", "具体", "详细"]
-            if any(indicator in query for indicator in content_indicators):
-                return "fragment"
-            
-            # 规则4：向量相似度判断（简化实现）
+            # 规则5：向量相似度判断（简化实现，兜底）
             similarity_score = self._calculate_title_similarity(query)
             
             if similarity_score >= 0.45:
@@ -362,6 +391,125 @@ class SearchService:
             similarity -= 0.1
             
         return min(similarity, 1.0)
+    
+    def _vector_based_intent_classification(self, query: str) -> Optional[str]:
+        """🔧 基于向量数据库的意图判别"""
+        try:
+            if not self.milvus_client or not self.embedding_model:
+                logger.debug("向量意图判别：Milvus客户端或嵌入模型未初始化")
+                return None
+            
+            # 编码查询向量
+            query_vector = self.embedding_model.encode(
+                query, 
+                normalize_embeddings=self.normalize
+            ).tolist()
+            
+            # 分别搜索标题和片段向量
+            try:
+                # 🔧 搜索标题和完整section向量（使用新的content_type字段）
+                title_results = self.milvus_client.search_vectors(
+                    query_vectors=[query_vector],
+                    top_k=5,
+                    expr="content_type in ['title', 'section']"
+                )
+                
+                # 搜索片段向量
+                fragment_results = self.milvus_client.search_vectors(
+                    query_vectors=[query_vector],
+                    top_k=5, 
+                    expr="content_type == 'fragment'"
+                )
+                
+                # 提取分数
+                title_scores = []
+                fragment_scores = []
+                
+                # 🔧 修复：MilvusManager.search_vectors返回的是字典列表，不是嵌套列表
+                if title_results and len(title_results) > 0:
+                    title_scores = [hit.get('score', 0) for hit in title_results]
+                    
+                if fragment_results and len(fragment_results) > 0:
+                    fragment_scores = [hit.get('score', 0) for hit in fragment_results]
+                
+                # 计算统计指标
+                title_max = max(title_scores) if title_scores else 0
+                title_avg = sum(title_scores) / len(title_scores) if title_scores else 0
+                
+                fragment_max = max(fragment_scores) if fragment_scores else 0
+                fragment_avg = sum(fragment_scores) / len(fragment_scores) if fragment_scores else 0
+                
+                # 判别逻辑
+                score_diff = title_max - fragment_max
+                avg_diff = title_avg - fragment_avg
+                
+                logger.debug(f"向量意图分析: title_max={title_max:.3f}, fragment_max={fragment_max:.3f}, "
+                           f"score_diff={score_diff:.3f}, avg_diff={avg_diff:.3f}")
+                
+                # 阈值判别
+                if score_diff > 0.1 and avg_diff > 0.05:
+                    return "title"
+                elif score_diff < -0.1 and avg_diff < -0.05:
+                    return "fragment"
+                elif abs(score_diff) <= 0.05:
+                    return "hybrid"
+                else:
+                    return "title" if title_max > fragment_max else "fragment"
+                    
+            except Exception as e:
+                logger.warning(f"向量搜索失败，可能是filter_expr语法问题: {str(e)}")
+                # 降级到metadata过滤（向后兼容）
+                return self._fallback_metadata_intent_classification(query_vector)
+                
+        except Exception as e:
+            logger.warning(f"向量意图判别失败: {str(e)}")
+            return None
+    
+    def _fallback_metadata_intent_classification(self, query_vector: List[float]) -> Optional[str]:
+        """降级到metadata过滤的意图判别"""
+        try:
+            # 搜索所有向量，然后在结果中过滤
+            all_results = self.milvus_client.search_vectors(
+                query_vectors=[query_vector],
+                top_k=20
+            )
+            
+            if not all_results or len(all_results) == 0:
+                return None
+                
+            title_scores = []
+            fragment_scores = []
+            
+            # 🔧 修复：all_results是字典列表，不是嵌套列表
+            for hit in all_results:
+                metadata_str = hit.get('metadata', '{}')
+                try:
+                    import json
+                    metadata = json.loads(metadata_str) if isinstance(metadata_str, str) else metadata_str
+                    content_type = metadata.get('content_type', 'fragment')
+                    score = hit.get('score', 0)
+                    
+                    if content_type == 'title':
+                        title_scores.append(score)
+                    else:
+                        fragment_scores.append(score)
+                except:
+                    continue
+            
+            # 简化判别逻辑
+            title_max = max(title_scores) if title_scores else 0
+            fragment_max = max(fragment_scores) if fragment_scores else 0
+            
+            if title_max > fragment_max + 0.1:
+                return "title"
+            elif fragment_max > title_max + 0.1:
+                return "fragment"
+            else:
+                return None
+                
+        except Exception as e:
+            logger.warning(f"降级意图判别也失败: {str(e)}")
+            return None
     
     def _configure_retrieval(self, query: str, intent_type: str) -> Dict:
         """③ 候选召回配置"""
@@ -824,7 +972,8 @@ class SearchService:
                 expanded.update(entity_mappings[entity_name])
         
         return list(expanded)
-    
+
+
     def _aggregate_by_section(self, bm25_results: List[Dict], vector_results: List[Dict], 
                             graph_results: List[Dict], understanding_result: Dict) -> List[Dict]:
         """④ 聚合与分数融合（到 section 粒度）"""
@@ -847,12 +996,23 @@ class SearchService:
                         "graph_scores": [],
                         "evidence_elements": [],
                         "all_sources": set(),
-                        "metadata": {"page_numbers": set(), "content_types": set()}
+                        "metadata": {"page_numbers": set(), "content_types": set()},
+                        "has_title_match": False  # 跟踪是否包含title类型的匹配
                     }
                 
                 group = section_groups[section_id]
                 source = result.get("source", "unknown")
                 score = result.get("score", 0)
+                
+                # 🔧 意图感知的分数加权
+                intent_type = understanding_result.get("intent_type", "fragment")
+                content_type = result.get("content_type", "")
+                
+                # 如果是title意图且命中了title类型的内容，给予更高权重
+                if intent_type == "title" and content_type == "title":
+                    score = score * 1.5  # title意图下title内容加权150%
+                    group["has_title_match"] = True  # 标记这个section包含title匹配
+                    logger.debug(f"Title意图检测到title内容匹配，分数从原始值加权到: {score}")
                 
                 # 按来源分类分数
                 if source == "bm25":
@@ -890,8 +1050,14 @@ class SearchService:
                 vector_norm = self._normalize_scores_list(group["vector_scores"])
                 graph_norm = self._normalize_scores_list(group["graph_scores"])
                 
-                # 线性加权融合
-                final_score = 0.5 * bm25_norm + 0.5 * vector_norm + 0.0 * graph_norm
+                # 🔧 意图感知的分数融合策略
+                intent_type = understanding_result.get("intent_type", "fragment")
+                if intent_type == "title":
+                    # title意图：更重视BM25的精确匹配（因为title通常是关键词匹配）
+                    final_score = 0.6 * bm25_norm + 0.4 * vector_norm + 0.0 * graph_norm
+                else:
+                    # fragment意图：更重视语义匹配
+                    final_score = 0.4 * bm25_norm + 0.6 * vector_norm + 0.0 * graph_norm
                 
                 # 选择Top-3证据元素
                 top_evidence = sorted(group["evidence_elements"], 
@@ -911,7 +1077,10 @@ class SearchService:
                     "metadata": {
                         **group["metadata"],
                         "page_numbers": list(group["metadata"]["page_numbers"]),
-                        "content_types": list(group["metadata"]["content_types"])
+                        "content_types": list(group["metadata"]["content_types"]),
+                        "aggregation_type": "section",
+                        "has_title_match": group["has_title_match"],
+                        "intent_type": intent_type
                     }
                 }
                 
@@ -926,27 +1095,29 @@ class SearchService:
             return []
     
     def _normalize_scores_list(self, scores: List[float]) -> float:
-        """归一化分数列表"""
+        """归一化分数列表 - 保留分数的相对重要性"""
         if not scores:
             return 0.0
         
         if len(scores) == 1:
             return scores[0]
         
-        # Min-Max归一化
-        min_score = min(scores)
-        max_score = max(scores)
+        # 🔧 修复：使用加权平均而不是简单的Min-Max归一化
+        # 这样可以保留高分数的优势，不会被过度压缩
+        total_score = sum(scores)
+        if total_score == 0:
+            return 0.0
         
-        if max_score == min_score:
-            return 0.5
+        # 使用加权平均：每个分数的权重 = 分数在总分中的占比
+        weights = [score / total_score for score in scores]
+        weighted_average = sum(score * weight for score, weight in zip(scores, weights))
         
-        normalized_scores = [(score - min_score) / (max_score - min_score) for score in scores]
-        return sum(normalized_scores) / len(normalized_scores)
+        return weighted_average
     
-    def _rerank_sections(self, section_candidates: List[Dict], understanding_result: Dict) -> Optional[Dict]:
-        """⑤ 重排（把"最相关的一节"放到第一）"""
+    def _rerank_sections(self, candidates: List[Dict], understanding_result: Dict) -> Optional[Dict]:
+        """⑤ 意图感知的重排（把"最相关的内容"放到第一）"""
         try:
-            if not section_candidates:
+            if not candidates:
                 return None
             
             original_query = understanding_result.get("normalized_query", "")
@@ -954,7 +1125,7 @@ class SearchService:
             if self.reranker:
                 # 使用真实的重排模型
                 query_section_pairs = []
-                for candidate in section_candidates:
+                for candidate in candidates:
                     rerank_text = self._build_rerank_text(candidate)
                     query_section_pairs.append([original_query, rerank_text])
                 
@@ -968,12 +1139,13 @@ class SearchService:
                     rerank_scores.extend(batch_scores)
                 
                 # 更新分数并排序
-                for i, candidate in enumerate(section_candidates):
+                for i, candidate in enumerate(candidates):
                     candidate["rerank_score"] = float(rerank_scores[i])
                     candidate["final_score"] = candidate["final_score"] * 0.3 + candidate["rerank_score"] * 0.7
             else:
-                # 使用简单评分
-                for candidate in section_candidates:
+                # 🔧 使用意图感知的简单评分
+                intent_type = understanding_result.get("intent_type", "fragment")
+                for candidate in candidates:
                     title = candidate.get("title", "")
                     evidence_text = " ".join([ev.get("content", "") for ev in candidate.get("evidence_elements", [])])
                     
@@ -985,13 +1157,22 @@ class SearchService:
                     title_match = len(query_words.intersection(title_words)) / len(query_words) if query_words else 0
                     evidence_match = len(query_words.intersection(evidence_words)) / len(query_words) if query_words else 0
                     
-                    rerank_score = title_match * 2 + evidence_match
+                    # 🔧 根据意图类型调整重排权重
+                    if intent_type == "title":
+                        # title意图：极重视标题匹配
+                        rerank_score = title_match * 3 + evidence_match * 0.5
+                        final_weight = 0.7  # 重排权重更高
+                    else:
+                        # fragment意图：平衡标题和内容匹配
+                        rerank_score = title_match * 1.5 + evidence_match
+                        final_weight = 0.5  # 标准权重
+                    
                     candidate["rerank_score"] = rerank_score
-                    candidate["final_score"] = candidate["final_score"] * 0.5 + rerank_score * 0.5
+                    candidate["final_score"] = candidate["final_score"] * (1 - final_weight) + rerank_score * final_weight
             
             # 排序并返回Top-1
-            section_candidates.sort(key=lambda x: x["final_score"], reverse=True)
-            top_section = section_candidates[0]
+            candidates.sort(key=lambda x: x["final_score"], reverse=True)
+            top_section = candidates[0]
             
             # 片段级高亮
             top_section["evidence_highlights"] = self._select_evidence_highlights(top_section, original_query)
@@ -1000,7 +1181,7 @@ class SearchService:
             
         except Exception as e:
             logger.error(f"重排失败: {str(e)}")
-            return section_candidates[0] if section_candidates else None
+            return candidates[0] if candidates else None
     
     def _build_rerank_text(self, candidate: Dict) -> str:
         """构建重排用的文本"""
@@ -1044,28 +1225,90 @@ class SearchService:
         return evidence_elements[:3]
     
     def _expand_section_content(self, top_section: Dict) -> List[Dict]:
-        """⑦ 扩展（把"一家子"拉齐）"""
+        """⑷ 扩展（把"一家子"拉齐）- 多数据源融合"""
         try:
             section_id = top_section.get("section_id")
             if not section_id:
                 return []
             
+            expanded_elements = []
+            
+            # 🔧 第一步：从OpenSearch/MySQL查询表格和图片内容
+            multimodal_elements = self._query_section_multimodal_content(section_id, top_section)
+            if multimodal_elements:
+                expanded_elements.extend(multimodal_elements)
+            
+            # 🔧 第二步：从Neo4j查询实体关系内容
             if self.neo4j_client:
-                # 基于实际数据库结构查询相关内容
-                expanded_elements = self._query_actual_graph_structure(section_id, top_section)
-                if expanded_elements:
-                    return expanded_elements
-                else:
-                    # 如果图数据库中没有找到，使用模拟数据
-                    logger.info(f"图数据库中未找到section_id={section_id}的内容，使用模拟扩展")
-                    return self._mock_section_expansion(top_section)
-            else:
-                # 使用模拟数据
+                entity_elements = self._query_actual_graph_structure(section_id, top_section)
+                if entity_elements:
+                    expanded_elements.extend(entity_elements)
+            
+            # 🔧 第三步：如果都没有数据，使用模拟数据
+            if not expanded_elements:
+                logger.info(f"未找到section_id={section_id}的扩展内容，使用模拟数据")
                 return self._mock_section_expansion(top_section)
+            
+            return expanded_elements
                 
         except Exception as e:
             logger.error(f"内容扩展失败: {str(e)}")
             return self._mock_section_expansion(top_section)
+    
+    def _query_section_multimodal_content(self, section_id: str, top_section: Dict) -> List[Dict]:
+        """查询section相关的表格和图片内容"""
+        try:
+            multimodal_elements = []
+            
+            # 🔧 策略1：从OpenSearch查询表格和图片
+            if self.opensearch_client:
+                try:
+                    # 查询该section下的表格和图片
+                    query_body = {
+                        "query": {
+                            "bool": {
+                                "must": [
+                                    {"term": {"section_id.keyword": section_id}},
+                                    {"terms": {"content_type.keyword": ["table", "image"]}}
+                                ]
+                            }
+                        },
+                        "size": 50
+                    }
+                    
+                    response = self.opensearch_client.search(self.index_name, query_body)
+                    
+                    if response and 'hits' in response and 'hits' in response['hits']:
+                        for hit in response['hits']['hits']:
+                            source = hit['_source']
+                            element = {
+                                "element_id": source.get("element_id", ""),
+                                "content_type": source.get("content_type", ""),
+                                "content": source.get("content", ""),
+                                "title": source.get("title", ""),
+                                "order": len(multimodal_elements) + 1,
+                                "page_number": source.get("page_number", 1),
+                                "bbox": source.get("bbox", {}),
+                                "metadata": {
+                                    "doc_id": source.get("doc_id", ""),
+                                    "section_id": section_id,
+                                    "source": "opensearch_multimodal"
+                                }
+                            }
+                            multimodal_elements.append(element)
+                    
+                except Exception as e:
+                    logger.warning(f"OpenSearch查询表格图片失败: {str(e)}")
+            
+            # 🔧 策略2：从MySQL查询（如果有MySQL连接）
+            # TODO: 这里可以添加MySQL查询逻辑
+            
+            logger.info(f"找到{len(multimodal_elements)}个多媒体元素")
+            return multimodal_elements
+            
+        except Exception as e:
+            logger.error(f"查询多媒体内容失败: {str(e)}")
+            return []
     
     def _query_actual_graph_structure(self, section_id: str, top_section: Dict) -> List[Dict]:
         """基于实际数据库结构查询相关内容"""
@@ -1293,52 +1536,170 @@ class SearchService:
             }
         ]
     
-    def _enrich_multimodal_details(self, expanded_content: List[Dict]) -> List[Dict]:
-        """⑧ 图表细节（MySQL）"""
+    def _enrich_multimodal_details(self, top_section: Dict) -> List[Dict]:
+        """⑧ 图表细节（MySQL）- 基于section查询MySQL获取图表详细信息"""
         try:
+            section_id = top_section.get("section_id")
+            if not section_id:
+                logger.warning("section_id为空，无法查询图表细节")
+                return []
+            
             enriched_content = []
             
-            for element in expanded_content:
-                element_copy = element.copy()
-                content_type = element.get("content_type", "")
-                
-                if content_type == "table":
-                    # 补充表格细节
-                    element_copy["table_details"] = {
-                        "rows": 3,
-                        "columns": 3,
-                        "headers": ["参数名称", "标准值", "检测方法"],
-                        "data": [
-                            ["HCP含量", "<100ng/mg", "ELISA"],
-                            ["pH值", "7.0±0.2", "pH计"],
-                            ["纯度", ">95%", "SDS-PAGE"]
-                        ],
-                        "html": """<table class="data-table">
-                            <tr><th>参数名称</th><th>标准值</th><th>检测方法</th></tr>
-                            <tr><td>HCP含量</td><td>&lt;100ng/mg</td><td>ELISA</td></tr>
-                            <tr><td>pH值</td><td>7.0±0.2</td><td>pH计</td></tr>
-                            <tr><td>纯度</td><td>&gt;95%</td><td>SDS-PAGE</td></tr>
-                        </table>"""
-                    }
-                elif content_type == "image":
-                    # 补充图片细节
-                    element_copy["image_details"] = {
-                        "image_path": "/upload/images/hcp_process_diagram.jpg",
-                        "caption": "HCP检测标准操作流程图",
-                        "alt_text": "流程图显示了从样品准备到结果分析的完整HCP检测步骤",
-                        "width": 800,
-                        "height": 600,
-                        "format": "jpg",
-                        "size_kb": 245
-                    }
-                
-                enriched_content.append(element_copy)
+            # 🔧 第一步：查询figures表获取图片信息
+            figures = self._query_figures_from_mysql(section_id)
+            enriched_content.extend(figures)
             
+            # 🔧 第二步：查询tables表获取表格信息
+            tables = self._query_tables_from_mysql(section_id)
+            enriched_content.extend(tables)
+            
+            logger.info(f"从MySQL查询到{len(enriched_content)}个图表元素")
             return enriched_content
             
         except Exception as e:
             logger.error(f"图表细节补充失败: {str(e)}")
-            return expanded_content
+            return []
+    
+    def _query_figures_from_mysql(self, section_id: str) -> List[Dict]:
+        """从MySQL figures表查询图片信息"""
+        try:
+            if not hasattr(self, 'mysql_client') or not self.mysql_client:
+                logger.debug("MySQL客户端未初始化，跳过figures查询")
+                return []
+            
+            session = self.mysql_client.get_session()
+            try:
+                # 查询该section下的所有图片
+                query = """
+                SELECT elem_id, section_id, image_path, caption, page, bbox_norm, bind_to_elem_id
+                FROM figures 
+                WHERE section_id = :section_id
+                ORDER BY page, elem_id
+                """
+                
+                result = session.execute(text(query), {"section_id": section_id})
+                figures = []
+                
+                for row in result:
+                    figure_element = {
+                        "element_id": row.elem_id,
+                        "content_type": "image",
+                        "content": row.caption or f"图片 {row.elem_id}",
+                        "title": row.caption or "图片",
+                        "order": len(figures) + 1,
+                        "page_number": row.page,
+                        "bbox": row.bbox_norm or {},
+                        "metadata": {
+                            "section_id": section_id,
+                            "source": "mysql_figures",
+                            "bind_to_elem_id": row.bind_to_elem_id
+                        },
+                        "image_details": {
+                            "image_path": row.image_path,
+                            "caption": row.caption,
+                            "alt_text": row.caption or f"图片 {row.elem_id}",
+                            "page": row.page,
+                            "bbox": row.bbox_norm,
+                            "source": "mysql"
+                        }
+                    }
+                    figures.append(figure_element)
+                
+                logger.info(f"从MySQL查询到{len(figures)}张图片")
+                return figures
+                
+            finally:
+                session.close()
+                
+        except Exception as e:
+            logger.error(f"查询figures表失败: {str(e)}")
+            return []
+    
+    def _query_tables_from_mysql(self, section_id: str) -> List[Dict]:
+        """从MySQL tables表查询表格信息"""
+        try:
+            if not hasattr(self, 'mysql_client') or not self.mysql_client:
+                logger.debug("MySQL客户端未初始化，跳过tables查询")
+                return []
+            
+            session = self.mysql_client.get_session()
+            try:
+                # 查询该section下的所有表格
+                tables_query = """
+                SELECT elem_id, section_id, table_html, n_rows, n_cols
+                FROM tables 
+                WHERE section_id = :section_id
+                ORDER BY elem_id
+                """
+                
+                result = session.execute(text(tables_query), {"section_id": section_id})
+                tables = []
+                
+                for row in result:
+                    # 查询表格的详细行数据
+                    table_rows = self._query_table_rows(session, row.elem_id)
+                    
+                    table_element = {
+                        "element_id": row.elem_id,
+                        "content_type": "table",
+                        "content": f"表格 {row.elem_id} ({row.n_rows}行×{row.n_cols}列)",
+                        "title": f"表格 {len(tables) + 1}",
+                        "order": len(tables) + 1,
+                        "page_number": 1,  # 可以从其他地方获取
+                        "bbox": {},
+                        "metadata": {
+                            "section_id": section_id,
+                            "source": "mysql_tables",
+                            "table_elem_id": row.elem_id
+                        },
+                        "table_details": {
+                            "elem_id": row.elem_id,
+                            "rows": row.n_rows,
+                            "columns": row.n_cols,
+                            "html": row.table_html,
+                            "data": table_rows,
+                            "source": "mysql"
+                        }
+                    }
+                    tables.append(table_element)
+                
+                logger.info(f"从MySQL查询到{len(tables)}张表格")
+                return tables
+                
+            finally:
+                session.close()
+                
+        except Exception as e:
+            logger.error(f"查询tables表失败: {str(e)}")
+            return []
+    
+    def _query_table_rows(self, session, table_elem_id: str) -> List[Dict]:
+        """查询表格的详细行数据"""
+        try:
+            rows_query = """
+            SELECT row_index, row_text, row_json
+            FROM table_rows 
+            WHERE table_elem_id = :table_elem_id
+            ORDER BY row_index
+            """
+            
+            result = session.execute(text(rows_query), {"table_elem_id": table_elem_id})
+            rows_data = []
+            
+            for row in result:
+                row_data = {
+                    "row_index": row.row_index,
+                    "row_text": row.row_text,
+                    "row_json": row.row_json
+                }
+                rows_data.append(row_data)
+            
+            return rows_data
+            
+        except Exception as e:
+            logger.error(f"查询表格行数据失败: {str(e)}")
+            return []
     
     def _stream_render_answer(self, query: str, top_section: Dict, enriched_content: List[Dict], 
                             understanding_result: Dict) -> Generator[Dict, None, None]:
@@ -1354,13 +1715,13 @@ class SearchService:
             # 按order排序内容
             sorted_content = sorted(enriched_content, key=lambda x: x.get("order", 999))
             
-            # 流式输出内容元素
+            # 🔧 优化：流式输出内容元素（支持多种内容类型）
             paragraph_count = 0
             for element in sorted_content:
                 content_type = element.get("content_type", "text")
                 
-                if content_type in ["title", "paragraph"]:
-                    # 标题和段落：立即流式输出
+                if content_type in ["title", "paragraph", "fragment", "section"]:
+                    # 文本内容：立即流式输出
                     content = self._apply_evidence_highlighting(element, top_section.get("evidence_highlights", []))
                     
                     yield {
@@ -1373,7 +1734,7 @@ class SearchService:
                         sleep(0.1)  # 前两个段落输出后稍微暂停
                         
                 elif content_type == "table":
-                    # 表格：推送表格事件
+                    # 表格：推送表格事件（支持MySQL查询的表格数据）
                     yield {
                         "type": "multimodal_content",
                         "content_type": "table",
@@ -1381,11 +1742,21 @@ class SearchService:
                     }
                     
                 elif content_type == "image":
-                    # 图片：推送图片事件
+                    # 图片：推送图片事件（支持MySQL查询的图片数据）
                     yield {
                         "type": "multimodal_content",
-                        "content_type": "image",
+                        "content_type": "image", 
                         "data": self._format_image_for_stream(element)
+                    }
+                    
+                elif content_type == "entity":
+                    # 🔧 新增：实体信息流式输出
+                    entity_details = element.get("entity_details", {})
+                    entity_content = f"**实体**: {element.get('title', '未知实体')} (类型: {entity_details.get('entity_type', '未知')})"
+                    
+                    yield {
+                        "type": "answer_chunk",
+                        "content": entity_content + "\n\n"
                     }
             
             # 生成引用信息
