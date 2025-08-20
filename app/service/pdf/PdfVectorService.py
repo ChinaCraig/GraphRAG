@@ -110,6 +110,9 @@ class PdfVectorService:
                 if vector:
                     vector_id = f"{document_id}_{idx}"
                     
+                    # 🔧 提取content_type到独立字段
+                    content_type = unit['content_type']
+                    
                     vector_data.append({
                         'id': vector_id,
                         'vector': vector,
@@ -117,8 +120,10 @@ class PdfVectorService:
                         'element_id': unit.get('element_id', ''),
                         'chunk_index': idx,
                         'content': unit['content'],
+                        # 🔧 新增：独立的content_type字段
+                        'content_type': content_type,
                         'metadata': {
-                            'content_type': unit['content_type'],
+                            'content_type': content_type,  # 保持向后兼容
                             'title': unit.get('title', ''),
                             'page_number': unit.get('page_number', 1),
                             'element_ids': unit.get('element_ids', []),
@@ -188,10 +193,10 @@ class PdfVectorService:
                 page_start = section.get('page_start', 1)
                 blocks = section.get('blocks', [])
                 
-                # 1. 创建title级别的内容单元（使用full_text）
-                if full_text.strip():
+                # 1. 创建title级别的内容单元（🔧 修复：只使用标题文本）
+                if title.strip():
                     title_unit = {
-                        'content': full_text,
+                        'content': title,  # 🔧 修复：只存储标题文本，不是full_text
                         'content_type': 'title',
                         'title': title,
                         'page_number': page_start,
@@ -201,11 +206,29 @@ class PdfVectorService:
                     }
                     content_units.append(title_unit)
                 
+                # 🔧 新增：创建section级别的完整内容单元（用于获取完整上下文）
+                if full_text.strip() and full_text != title:
+                    section_unit = {
+                        'content': full_text,
+                        'content_type': 'section',  # 新的类型：完整section
+                        'title': title,
+                        'page_number': page_start,
+                        'element_id': section_id + '_full',
+                        'element_ids': section.get('elem_ids', []),
+                        'section_id': section_id
+                    }
+                    content_units.append(section_unit)
+                
                 # 2. 创建fragment级别的内容单元（处理blocks）
                 for block in blocks:
                     block_type = block.get('type', '').lower()
                     elem_id = block.get('elem_id', '')
                     page = block.get('page', page_start)
+                    
+                    # 🔧 修复：跳过标题类型的block，避免重复存储
+                    # 标题已经在上面作为title类型处理过了
+                    if block_type == 'title':
+                        continue
                     
                     # 根据block类型提取文本内容
                     fragment_text = self._extract_block_text(block, block_type)

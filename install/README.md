@@ -82,6 +82,11 @@ cd install
 | `all-mpnet-base-v2+2.7.0.sh` | 2.7.0 | 英文高精度模型 | ~420MB | 生产环境、高精度要求 | ✅ 3次重试 + 🪞 阿里云镜像 |
 | `paraphrase-multilingual-mpnet-base-v2+2.7.0.sh` | 2.7.0 | 多语言模型（项目主要模型） | ~470MB | 中英文混合处理 | ⭐ **5次重试 + 🪞 阿里云镜像** |
 
+### 重排模型 (Cross-Encoder)
+| 脚本名称 | 版本 | 描述 | 大小 | 用途 | 特点 |
+|---------|------|------|------|------|------|
+| `bge-reranker-large+1.5.0.sh` | 1.5.0 | BGE重排模型 | ~560MB | 提升检索精度、三路召回重排 | ⭐ **5次重试 + 🪞 阿里云镜像** |
+
 **特别说明：** 
 - `paraphrase-multilingual-mpnet-base-v2` 是项目配置文件中指定的主要嵌入模型
 - 🪞 **所有Sentence-Transformers模型默认使用阿里云镜像源，无需额外配置**

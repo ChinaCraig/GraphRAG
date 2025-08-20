@@ -40,6 +40,74 @@ query_optimization:
   cache_optimization_results: false                   # 是否缓存优化结果（暂未实现）
   log_optimization_details: true                     # 是否记录优化详情到日志
 
+# 重排模型配置
+reranker:
+  enabled: true                                      # 是否启用重排模型（已下载，可以启用）
+  model_name: "BAAI/bge-reranker-large"              # 重排模型名称（推荐BGE重排模型）
+  device: "cpu"                                      # 使用设备(cpu/cuda)
+  batch_size: 16                                     # 批处理大小
+  max_length: 512                                    # 最大输入长度
+  cache_dir: "./models"                              # 模型缓存目录
+  top_k: 100                                         # 重排前候选数量
+  output_k: 20                                       # 重排后输出数量
+  
+  # 重排策略配置
+  strategy:
+    enable_cross_encoder: true                       # 是否启用Cross-Encoder重排
+    enable_diversity_control: true                   # 是否启用多样性控制(MMR)
+    enable_content_filtering: true                   # 是否启用内容过滤
+    diversity_lambda: 0.5                           # MMR多样性参数(0-1)
+    similarity_threshold: 0.9                       # 去重相似度阈值
+
+# 知识图谱模型配置 (新增)
+knowledge_graph:
+  # 统计式NER模型配置
+  ner:
+    enabled: true                                     # 是否启用NER模型
+    model_name: "bert-base-chinese"                   # NER模型名称 (tokenizer)
+    device: "cpu"                                     # 使用设备(cpu/cuda) 
+    cache_dir: "./models"                             # 模型缓存目录
+    max_length: 512                                   # 最大输入长度
+    batch_size: 16                                    # 批处理大小
+    confidence_thresholds:                            # 置信度阈值分桶
+      high: 0.9
+      medium: 0.7  
+      low: 0.5
+    fallback_to_rules: true                          # 模型加载失败时是否降级到规则方法
+    
+  # 实体链接模型配置  
+  entity_linking:
+    enabled: true                                     # 是否启用实体链接
+    bi_encoder: "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"  # Bi-encoder模型
+    cross_encoder: "BAAI/bge-reranker-large"         # Cross-encoder重排模型 
+    cache_dir: "./models"                             # 模型缓存目录
+    device: "cpu"                                     # 使用设备
+    candidate_top_k: 10                              # 召回候选数量
+    rerank_threshold: 0.7                            # 重排置信度阈值
+    nil_threshold: 0.5                               # NIL判断阈值
+    context_window: 50                               # 上下文窗口大小
+    
+  # 关系抽取模型配置
+  relation_extraction:
+    enabled: true                                     # 是否启用关系抽取
+    method: "rule_based"                             # 抽取方法: rule_based, model_based  
+    sentence_window: 2                               # 跨句窗口大小
+    confidence_threshold: 0.5                       # 关系置信度阈值
+    evidence_aggregation: true                       # 是否启用证据聚合
+    
+  # 规则锚点识别配置
+  rule_anchor:
+    enabled: true                                     # 是否启用规则锚点识别
+    use_ac_automaton: true                           # 是否使用AC自动机
+    normalization: true                              # 是否启用字符归一化
+    conflict_resolution: "priority_based"            # 冲突消解策略: priority_based, confidence_based
+    priority_map:                                    # 实体类型优先级映射
+      CellLine: 1
+      Protein: 2
+      Reagent: 3
+      Product: 4
+      Metric: 5
+
 # 模型通用配置
 general:
   model_cache_size: 100                               # 模型缓存大小(MB)

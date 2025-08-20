@@ -263,6 +263,35 @@ def register_frontend_routes(app):
         js_dir = os.path.join(base_dir, 'app', 'templates', 'js')
         return send_from_directory(js_dir, filename)
 
+    @app.route('/static/uploads/<path:filename>')
+    def uploaded_files(filename):
+        """
+        上传文件路由 - 服务figures文件夹中的图片
+        """
+        import os
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # 检查是否是figures文件夹中的文件
+        if filename.startswith('figures/'):
+            # 直接从项目根目录的figures文件夹服务
+            figures_dir = os.path.join(base_dir, 'figures')
+            # 移除'figures/'前缀，获取实际文件名
+            actual_filename = filename[8:]  # 移除'figures/'
+            
+            app.logger.info(f"请求图片文件: {filename}")
+            app.logger.info(f"figures目录: {figures_dir}")
+            app.logger.info(f"实际文件名: {actual_filename}")
+            
+            if os.path.exists(os.path.join(figures_dir, actual_filename)):
+                return send_from_directory(figures_dir, actual_filename)
+            else:
+                app.logger.error(f"图片文件不存在: {os.path.join(figures_dir, actual_filename)}")
+                return "File not found", 404
+        else:
+            # 其他上传文件，从upload文件夹服务
+            upload_dir = os.path.join(base_dir, 'upload')
+            return send_from_directory(upload_dir, filename)
+
     @app.route('/health')
     def health_check():
         """

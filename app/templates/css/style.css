@@ -7,6 +7,13 @@
     box-sizing: border-box;
 }
 
+/* 重置mark标签的默认样式 */
+mark {
+    background: transparent;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
 :root {
     /* 颜色变量 - 暗黑模式优先 */
     --bg-primary: #343541;
@@ -1763,6 +1770,11 @@ body {
 /* 多模态内容渲染样式 */
 /* ============================= */
 
+/* 文本内容容器 */
+.text-content {
+    margin-bottom: var(--spacing-md);
+}
+
 /* 多模态内容容器 */
 .multimodal-content {
     margin-top: var(--spacing-md);
@@ -1798,9 +1810,9 @@ body {
 .multimodal-item {
     margin-bottom: var(--spacing-md);
     padding: var(--spacing-md);
-    background: var(--bg-secondary);
+    background: transparent;
     border-radius: var(--radius-md);
-    border: 1px solid var(--border-color);
+    border: 1px solid rgba(86, 88, 105, 0.2);
     transition: all 0.3s ease;
     opacity: 0;
     transform: translateY(10px);
@@ -1829,9 +1841,9 @@ body {
 }
 
 .multimodal-item:hover {
-    border-color: var(--border-hover);
+    border-color: rgba(142, 142, 160, 0.4);
     transform: translateY(-2px);
-    box-shadow: var(--shadow-lg);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .multimodal-item:last-child {
@@ -1845,13 +1857,13 @@ body {
     justify-content: space-between;
     margin-bottom: var(--spacing-sm);
     padding-bottom: var(--spacing-sm);
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid rgba(86, 88, 105, 0.3);
 }
 
 .multimodal-type {
     font-size: var(--font-size-sm);
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--text-secondary);
     display: flex;
     align-items: center;
     gap: var(--spacing-xs);
@@ -1860,7 +1872,7 @@ body {
 .multimodal-id {
     font-size: 0.75rem;
     color: var(--text-muted);
-    background: var(--bg-tertiary);
+    background: rgba(86, 88, 105, 0.2);
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     font-family: 'Courier New', monospace;
@@ -1914,12 +1926,12 @@ body {
 .table-item .table-title {
     font-size: var(--font-size-lg);
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--text-secondary);
     margin-bottom: var(--spacing-xs);
 }
 
 .table-item .table-summary {
-    color: var(--text-secondary);
+    color: var(--text-muted);
     font-size: var(--font-size-sm);
     margin-bottom: var(--spacing-md);
     line-height: 1.5;
@@ -1928,8 +1940,8 @@ body {
 .table-container {
     overflow-x: auto;
     border-radius: var(--radius-md);
-    border: 1px solid var(--border-color);
-    background: var(--bg-primary);
+    border: 1px solid rgba(86, 88, 105, 0.3);
+    background: transparent;
 }
 
 .multimodal-table {

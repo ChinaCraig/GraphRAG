@@ -8,17 +8,13 @@ import json
 import traceback
 from flask import Blueprint, request, Response, current_app
 from flask_socketio import emit
-from app.service.search.SearchRouteService import SearchRouteService
-from app.service.search.SearchFormatService import SearchFormatService
-from app.service.search.SearchAnswerService import SearchAnswerService
+from app.service.search.SearchService import SearchService
 
 # 创建蓝图
 search_bp = Blueprint('search', __name__, url_prefix='/api/search')
 
 # 初始化服务实例
-route_service = SearchRouteService()
-format_service = SearchFormatService()
-answer_service = SearchAnswerService()
+search_service = SearchService()
 
 
 @search_bp.route('/intelligent', methods=['POST', 'GET'])
@@ -120,63 +116,25 @@ def _stream_search_process(query, user_id, session_id, filters):
         str: SSE格式的响应数据
     """
     try:
-        # 第一阶段：理解过程（Query理解与路由）
-        yield _format_sse_event("stage_update", {
-            "stage": "understanding",
-            "message": "🔍 正在理解您的查询...",
-            "progress": 10
-        })
-        
-        # 调用理解服务
-        understanding_result = route_service.process_query(query, filters)
-        
-        yield _format_sse_event("stage_update", {
-            "stage": "understanding", 
-            "message": "✅ 查询理解完成",
-            "progress": 30,
-            "data": {
-                "query_type": understanding_result.get("query_type"),
-                "entities": understanding_result.get("entities"),
-                "intent": understanding_result.get("intent")
-            }
-        })
-        
-        # 第二阶段：召回融合过程
-        yield _format_sse_event("stage_update", {
-            "stage": "retrieval",
-            "message": "📚 正在搜索相关内容...",
-            "progress": 50
-        })
-        
-        # 调用召回服务
-        retrieval_result = format_service.retrieve_and_rerank(understanding_result, filters)
-        
-        yield _format_sse_event("stage_update", {
-            "stage": "retrieval",
-            "message": f"✅ 内容召回完成，找到 {len(retrieval_result.get('candidates', []))} 个相关片段",
-            "progress": 70,
-            "data": {
-                "total_found": retrieval_result.get("total_found", 0),
-                "final_count": len(retrieval_result.get("candidates", []))
-            }
-        })
-        
-        # 第三阶段：答案生成过程
-        yield _format_sse_event("stage_update", {
-            "stage": "generation", 
-            "message": "✍️ 正在生成答案...",
-            "progress": 80
-        })
-        
-        # 流式生成答案 - 边生成边推送
-        for chunk in answer_service.generate_answer_stream(query, retrieval_result, understanding_result):
-            if chunk.get("type") == "answer_chunk":
+        # 调用统一的智能检索服务，直接流式处理
+        for chunk in search_service.intelligent_search(query, filters):
+            chunk_type = chunk.get("type", "")
+            
+            if chunk_type == "stage_update":
+                # 阶段更新
+                yield _format_sse_event("stage_update", {
+                    "stage": chunk.get("stage", ""),
+                    "message": chunk.get("message", ""),
+                    "progress": chunk.get("progress", 0),
+                    "data": chunk.get("data", {})
+                })
+            elif chunk_type == "answer_chunk":
                 # 推送文本增量
                 yield _format_sse_event("text_delta", {
                     "content": chunk.get("content", ""),
                     "append": True
                 })
-            elif chunk.get("type") == "multimodal_content":
+            elif chunk_type == "multimodal_content":
                 # 推送多模态内容事件
                 content_type = chunk.get("content_type")
                 if content_type == "image":
@@ -185,12 +143,16 @@ def _stream_search_process(query, user_id, session_id, filters):
                     yield _format_sse_event("render_table", chunk.get("data", {}))
                 elif content_type == "chart":
                     yield _format_sse_event("render_chart", chunk.get("data", {}))
-            elif chunk.get("type") == "final_answer":
-                # 推送最终完整答案（包含引用链接等）
+            elif chunk_type == "final_answer":
+                # 推送最终完整答案
                 yield _format_sse_event("final_answer", {
                     "answer": chunk.get("content", {}),
-                    "context": chunk.get("context", {}),
                     "metadata": chunk.get("metadata", {})
+                })
+            elif chunk_type == "error":
+                # 错误处理
+                yield _format_sse_event("error", {
+                    "message": chunk.get("message", "处理失败")
                 })
         
         # 完成
@@ -220,26 +182,22 @@ def _complete_search_process(query, user_id, session_id, filters):
         tuple: (response_dict, status_code)
     """
     try:
-        # 理解阶段
-        understanding_result = route_service.process_query(query, filters)
+        # 收集所有流式结果
+        all_chunks = []
+        final_answer = None
         
-        # 召回阶段
-        retrieval_result = format_service.retrieve_and_rerank(understanding_result, filters)
+        for chunk in search_service.intelligent_search(query, filters):
+            all_chunks.append(chunk)
+            if chunk.get("type") == "final_answer":
+                final_answer = chunk.get("content", {})
         
-        # 答案生成阶段
-        final_answer = answer_service.generate_answer_complete(query, retrieval_result, understanding_result)
-        
+        # 构建响应
         return {
             "success": True,
             "data": {
                 "query": query,
-                "understanding": understanding_result,
-                "retrieval": {
-                    "total_found": retrieval_result.get("total_found", 0),
-                    "final_count": len(retrieval_result.get("candidates", [])),
-                    "sources": retrieval_result.get("sources", [])
-                },
-                "answer": final_answer
+                "answer": final_answer or {},
+                "chunks": all_chunks
             },
             "user_id": user_id,
             "session_id": session_id
@@ -287,128 +245,62 @@ def _get_current_timestamp():
 
 @search_bp.route('/suggestions', methods=['GET'])
 def get_search_suggestions():
-    """
-    获取搜索建议
-    
-    Query Parameters:
-        q: 部分查询文本
-        limit: 返回建议数量，默认10
-    
-    Response:
-        {
-            "success": true,
-            "data": [
-                {
-                    "text": "建议文本",
-                    "type": "entity|concept|question",
-                    "score": 0.95
-                }
-            ]
-        }
-    """
+    """获取搜索建议（简化版）"""
     try:
         query = request.args.get('q', '').strip()
         limit = int(request.args.get('limit', 10))
         
-        if not query:
-            return {
-                "success": True,
-                "data": []
-            }
+        # 简单的建议列表
+        suggestions = [
+            {"text": "HCP检测方法", "type": "query", "score": 0.9},
+            {"text": "CHO细胞培养", "type": "query", "score": 0.8},
+            {"text": "蛋白质纯度检测", "type": "query", "score": 0.7}
+        ]
         
-        # 调用路由服务获取建议
-        suggestions = route_service.get_search_suggestions(query, limit)
+        # 过滤匹配的建议
+        if query:
+            filtered = [s for s in suggestions if query.lower() in s["text"].lower()]
+            return {"success": True, "data": filtered[:limit]}
         
-        return {
-            "success": True,
-            "data": suggestions
-        }
+        return {"success": True, "data": suggestions[:limit]}
         
     except Exception as e:
         current_app.logger.error(f"获取搜索建议错误: {str(e)}")
-        return {
-            "success": False,
-            "message": f"获取建议失败: {str(e)}"
-        }, 500
+        return {"success": False, "message": f"获取建议失败: {str(e)}"}, 500
 
 
 @search_bp.route('/history', methods=['GET'])
 def get_search_history():
-    """
-    获取搜索历史
-    
-    Query Parameters:
-        user_id: 用户ID
-        limit: 返回历史数量，默认20
-        offset: 偏移量，默认0
-    
-    Response:
-        {
-            "success": true,
-            "data": {
-                "total": 100,
-                "items": [
-                    {
-                        "query": "查询文本",
-                        "timestamp": "2024-01-01T00:00:00Z",
-                        "result_count": 10
-                    }
-                ]
-            }
-        }
-    """
+    """获取搜索历史（简化版）"""
     try:
-        user_id = request.args.get('user_id', 'anonymous')
-        limit = int(request.args.get('limit', 20))
-        offset = int(request.args.get('offset', 0))
-        
-        # 调用路由服务获取历史
-        history = route_service.get_search_history(user_id, limit, offset)
-        
         return {
             "success": True,
-            "data": history
+            "data": {
+                "total": 0,
+                "items": []
+            }
         }
-        
     except Exception as e:
         current_app.logger.error(f"获取搜索历史错误: {str(e)}")
-        return {
-            "success": False,
-            "message": f"获取历史失败: {str(e)}"
-        }, 500
+        return {"success": False, "message": f"获取历史失败: {str(e)}"}, 500
 
 
 @search_bp.route('/stats', methods=['GET'])
 def get_search_stats():
-    """
-    获取搜索统计信息
-    
-    Response:
-        {
-            "success": true,
-            "data": {
-                "total_searches": 1000,
-                "today_searches": 50,
-                "avg_response_time": 2.5,
-                "popular_queries": ["query1", "query2"]
-            }
-        }
-    """
+    """获取搜索统计信息（简化版）"""
     try:
-        # 调用路由服务获取统计
-        stats = route_service.get_search_stats()
-        
         return {
             "success": True,
-            "data": stats
+            "data": {
+                "total_searches": 0,
+                "today_searches": 0,
+                "avg_response_time": 0.0,
+                "popular_queries": []
+            }
         }
-        
     except Exception as e:
         current_app.logger.error(f"获取搜索统计错误: {str(e)}")
-        return {
-            "success": False,
-            "message": f"获取统计失败: {str(e)}"
-        }, 500
+        return {"success": False, "message": f"获取统计失败: {str(e)}"}, 500
 
 
 # WebSocket事件处理（可选，用于实时搜索）

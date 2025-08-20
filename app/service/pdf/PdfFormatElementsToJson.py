@@ -343,9 +343,31 @@ class PdfFormatElementsToJson:
         try:
             # 添加表格特有字段
             if hasattr(element, 'metadata') and hasattr(element.metadata, 'text_as_html'):
-                block['html'] = element.metadata.text_as_html
+                raw_html = element.metadata.text_as_html
+                # 确保table标签有正确的CSS类名
+                if raw_html and '<table' in raw_html:
+                    # 使用正则表达式更准确地添加CSS类名
+                    import re
+                    if 'class=' in raw_html:
+                        # 如果已经有class属性，在现有class中添加multimodal-table
+                        block['html'] = re.sub(
+                            r'<table([^>]*?)class=["\']([^"\']*)["\']([^>]*?)>',
+                            r'<table\1class="multimodal-table \2"\3>',
+                            raw_html,
+                            count=1
+                        )
+                    else:
+                        # 如果没有class属性，添加class="multimodal-table"
+                        block['html'] = re.sub(
+                            r'<table([^>]*?)>',
+                            r'<table\1 class="multimodal-table">',
+                            raw_html,
+                            count=1
+                        )
+                else:
+                    block['html'] = raw_html
             else:
-                block['html'] = f"<table><tr><td>{str(element)}</td></tr></table>"
+                block['html'] = f'<table class="multimodal-table"><tr><td>{str(element)}</td></tr></table>'
             
             # 简单的行解析
             text_lines = str(element).strip().split('\n')
