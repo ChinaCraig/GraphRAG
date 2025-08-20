@@ -2182,7 +2182,9 @@ class GraphRAGApp {
             const data = JSON.parse(event.data);
             startAnswering(); // 第一次接收文本时清空思考状态
             answerText += data.content;
-            answerContainer.innerHTML = this.formatMessageContent(answerText);
+            
+            // 🔧 修复：只更新文本内容，不重置整个容器
+            this.updateTextContent(answerContainer, answerText);
             this.scrollToBottom();
         });
         
@@ -2257,18 +2259,43 @@ class GraphRAGApp {
     handleRenderImage(container, data) {
         const imageElement = document.createElement('div');
         imageElement.className = 'multimodal-item image-item streaming-item';
+        
+        // 构建图片URL，支持多种路径格式
+        let imageUrl = data.image_url || data.url || data.image_path || '';
+        
+        // 如果是相对路径，添加基础URL
+        if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('/')) {
+            // 检查是否已经包含static/uploads前缀，避免重复添加
+            if (!imageUrl.startsWith('static/uploads/')) {
+                imageUrl = `/static/uploads/${imageUrl}`;
+            } else {
+                imageUrl = `/${imageUrl}`;
+            }
+        }
+        
         imageElement.innerHTML = `
             <div class="multimodal-header">
                 <span class="multimodal-type">🖼️ 图片</span>
-                <span class="multimodal-id">${data.element_id}</span>
+                <span class="multimodal-id">${data.element_id || ''}</span>
             </div>
+            <div class="image-title">${data.title || '图片'}</div>
+            ${data.description ? `<div class="image-description">${data.description}</div>` : ''}
             <div class="image-container">
-                <img src="${data.url}" alt="${data.description}" class="multimodal-image" 
-                     onerror="this.style.display='none'" 
-                     onload="this.parentNode.querySelector('.image-placeholder')?.remove()">
-                <div class="image-placeholder">📷 图片加载中...</div>
+                ${imageUrl ? `
+                    <img src="${imageUrl}" alt="${data.alt_text || data.description || '图片'}" class="multimodal-image" 
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" 
+                         onload="this.nextElementSibling.style.display='none';">
+                    <div class="image-error" style="display:none;">
+                        📷 图片加载失败
+                        <br><small>路径: ${imageUrl}</small>
+                    </div>
+                ` : `
+                    <div class="image-placeholder">📷 图片路径未找到</div>
+                `}
             </div>
-            ${data.description ? `<div class="multimodal-description">${data.description}</div>` : ''}
+            <div class="image-info">
+                ${data.page_number ? `<span class="page-info">第 ${data.page_number} 页</span>` : ''}
+            </div>
         `;
         
         this.appendMultimodalContent(container, imageElement);
@@ -2280,16 +2307,70 @@ class GraphRAGApp {
     handleRenderTable(container, data) {
         const tableElement = document.createElement('div');
         tableElement.className = 'multimodal-item table-item streaming-item';
+        
+        // 构建表格HTML内容
+        let tableContent = '';
+        
+        // 优先使用HTML内容
+        if (data.html_content) {
+            // 确保HTML表格有正确的CSS类名
+            let processedHtml = data.html_content;
+            if (processedHtml.includes('<table') && !processedHtml.includes('multimodal-table')) {
+                // 检查是否已有class属性
+                if (processedHtml.includes('class=')) {
+                    // 如果已有class属性，在现有class中添加multimodal-table
+                    processedHtml = processedHtml.replace(
+                        /(<table[^>]*class=["'])([^"']*)(["'][^>]*>)/gi,
+                        '$1multimodal-table $2$3'
+                    );
+                } else {
+                    // 如果没有class属性，添加class="multimodal-table"
+                    processedHtml = processedHtml.replace(
+                        /<table([^>]*?)>/gi, 
+                        '<table$1 class="multimodal-table">'
+                    );
+                }
+            }
+            
+            tableContent = `
+                <div class="table-content">
+                    ${processedHtml}
+                </div>
+            `;
+        } 
+        // 其次使用结构化数据
+        else if (data.structured_data && data.structured_data.length > 0) {
+            tableContent = `
+                <div class="table-content">
+                    ${this.generateTableHtml(data.structured_data)}
+                </div>
+            `;
+        }
+        // 最后使用表头信息构建简单表格
+        else if (data.headers && data.headers.length > 0) {
+            const headerRow = data.headers.map(h => `<th>${h}</th>`).join('');
+            tableContent = `
+                <div class="table-content">
+                    <table class="multimodal-table">
+                        <thead><tr>${headerRow}</tr></thead>
+                        <tbody>
+                            <tr><td colspan="${data.headers.length}">表格数据加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+        
         tableElement.innerHTML = `
             <div class="multimodal-header">
                 <span class="multimodal-type">📊 表格</span>
-                <span class="multimodal-id">${data.element_id}</span>
+                <span class="multimodal-id">${data.element_id || ''}</span>
             </div>
-            <div class="table-title">${data.title}</div>
-            <div class="table-summary">${data.summary}</div>
+            <div class="table-title">${data.title || '数据表'}</div>
+            ${data.description ? `<div class="table-description">${data.description}</div>` : ''}
+            ${tableContent}
             <div class="table-info">
-                <span class="table-size">${data.rows} 行 × ${data.columns} 列</span>
-                <a href="${data.url}" target="_blank" class="view-original">查看原表格</a>
+                <span class="table-size">${data.rows || 0} 行 × ${data.columns || 0} 列</span>
             </div>
         `;
         
@@ -2336,6 +2417,28 @@ class GraphRAGApp {
             `;
             container.appendChild(linksElement);
         }
+    }
+
+    /**
+     * 只更新文本内容，不影响多模态内容
+     */
+    updateTextContent(container, textContent) {
+        // 查找或创建文本内容容器
+        let textContainer = container.querySelector('.text-content');
+        if (!textContainer) {
+            textContainer = document.createElement('div');
+            textContainer.className = 'text-content';
+            // 将文本容器插入到多模态内容之前
+            const multimodalContainer = container.querySelector('.multimodal-content');
+            if (multimodalContainer) {
+                container.insertBefore(textContainer, multimodalContainer);
+            } else {
+                container.appendChild(textContainer);
+            }
+        }
+        
+        // 更新文本内容
+        textContainer.innerHTML = this.formatMessageContent(textContent);
     }
 
     /**

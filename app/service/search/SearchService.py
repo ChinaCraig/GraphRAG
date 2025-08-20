@@ -274,14 +274,11 @@ class SearchService:
             yield {"type": "stage_update", "stage": "enrichment", "message": "🖼️ 正在补充图表细节...", "progress": 85}
             multimodal_content = self._enrich_multimodal_details(top_section)
             
-            # 🔧 合并文本内容和图表内容
-            full_content = expanded_content + multimodal_content
-            
             # ⑨ 组装/渲染（可流式）
             yield {"type": "stage_update", "stage": "rendering", "message": "✍️ 正在生成答案...", "progress": 90}
             
             # 流式输出结果
-            yield from self._stream_render_answer(query, top_section, full_content, understanding_result)
+            yield from self._stream_render_answer(query, top_section, multimodal_content, understanding_result)
             
         except Exception as e:
             logger.error(f"智能检索失败: {str(e)}")
@@ -1059,9 +1056,9 @@ class SearchService:
                     # fragment意图：更重视语义匹配
                     final_score = 0.4 * bm25_norm + 0.6 * vector_norm + 0.0 * graph_norm
                 
-                # 选择Top-3证据元素
+                # 选择Top-1证据元素
                 top_evidence = sorted(group["evidence_elements"], 
-                                    key=lambda x: x["score"], reverse=True)[:3]
+                                    key=lambda x: x["score"], reverse=True)[:1]
                 
                 section_candidate = {
                     "section_id": section_id,
@@ -1188,8 +1185,8 @@ class SearchService:
         title = candidate.get("title", "")
         evidence_elements = candidate.get("evidence_elements", [])
         
-        # 取前2-3个最相关的片段
-        top_evidence = evidence_elements[:3]
+        # 取前1个最相关的片段
+        top_evidence = evidence_elements[:1]
         evidence_texts = [ev.get("content", "") for ev in top_evidence]
         
         # 组合文本
@@ -1220,9 +1217,9 @@ class SearchService:
             match_score = len(query_words.intersection(content_words)) / len(query_words) if query_words else 0
             evidence["highlight_score"] = evidence.get("score", 0) * 0.7 + match_score * 0.3
         
-        # 按高亮分数排序，选择1-3条
+        # 按高亮分数排序，选择1条
         evidence_elements.sort(key=lambda x: x.get("highlight_score", 0), reverse=True)
-        return evidence_elements[:3]
+        return evidence_elements[:1]
     
     def _expand_section_content(self, top_section: Dict) -> List[Dict]:
         """⑷ 扩展（把"一家子"拉齐）- 多数据源融合"""
@@ -1701,66 +1698,74 @@ class SearchService:
             logger.error(f"查询表格行数据失败: {str(e)}")
             return []
     
-    def _stream_render_answer(self, query: str, top_section: Dict, enriched_content: List[Dict], 
+    def _stream_render_answer(self, query: str, top_section: Dict, multimodal_content: List[Dict], 
                             understanding_result: Dict) -> Generator[Dict, None, None]:
-        """⑨ 组装/渲染（可流式）"""
+        """⑨ 组装/渲染（可流式）- 基于top_section的完整文本答案和多模态内容"""
         try:
-            # 首屏输出：找到章节信息
-            section_title = self._get_section_title(enriched_content)
+            # 从top_section获取完整的文本答案
+            evidence_elements = top_section.get("evidence_elements", [])
+            evidence_highlights = top_section.get("evidence_highlights", [])
+            section_title = top_section.get("title", "相关章节")
+            
+            # 首屏输出：章节标题
             yield {
                 "type": "answer_chunk",
-                "content": f"找到相关章节：**{section_title}**\n\n"
+                "content": f"## {section_title}\n\n"
             }
             
-            # 按order排序内容
-            sorted_content = sorted(enriched_content, key=lambda x: x.get("order", 999))
-            
-            # 🔧 优化：流式输出内容元素（支持多种内容类型）
-            paragraph_count = 0
-            for element in sorted_content:
-                content_type = element.get("content_type", "text")
-                
-                if content_type in ["title", "paragraph", "fragment", "section"]:
-                    # 文本内容：立即流式输出
-                    content = self._apply_evidence_highlighting(element, top_section.get("evidence_highlights", []))
-                    
-                    yield {
-                        "type": "answer_chunk",
-                        "content": content + "\n\n"
-                    }
-                    
-                    paragraph_count += 1
-                    if paragraph_count == 2:
-                        sleep(0.1)  # 前两个段落输出后稍微暂停
+            # 🔧 流式输出文本答案（基于evidence_elements和evidence_highlights）
+            if evidence_elements:
+                # 输出最相关的证据内容（已经是Top-1）
+                for evidence in evidence_elements:
+                    content = evidence.get("content", "")
+                    if content:
+                        # 应用高亮标记
+                        highlighted_content = self._apply_evidence_highlighting_to_content(
+                            content, evidence_highlights, evidence.get("element_id", "")
+                        )
                         
-                elif content_type == "table":
-                    # 表格：推送表格事件（支持MySQL查询的表格数据）
-                    yield {
-                        "type": "multimodal_content",
-                        "content_type": "table",
-                        "data": self._format_table_for_stream(element)
-                    }
-                    
-                elif content_type == "image":
-                    # 图片：推送图片事件（支持MySQL查询的图片数据）
-                    yield {
-                        "type": "multimodal_content",
-                        "content_type": "image", 
-                        "data": self._format_image_for_stream(element)
-                    }
-                    
-                elif content_type == "entity":
-                    # 🔧 新增：实体信息流式输出
-                    entity_details = element.get("entity_details", {})
-                    entity_content = f"**实体**: {element.get('title', '未知实体')} (类型: {entity_details.get('entity_type', '未知')})"
-                    
-                    yield {
-                        "type": "answer_chunk",
-                        "content": entity_content + "\n\n"
-                    }
+                        yield {
+                            "type": "answer_chunk",
+                            "content": highlighted_content + "\n\n"
+                        }
+                        sleep(0.1)  # 流式效果
             
-            # 生成引用信息
-            references = self._build_references_from_content(enriched_content, top_section.get("evidence_highlights", []))
+            # 🔧 深度分析并输出多模态内容
+            if multimodal_content:
+                # 按类型分组多模态内容
+                images = [item for item in multimodal_content if item.get("content_type") == "image"]
+                tables = [item for item in multimodal_content if item.get("content_type") == "table"]
+                charts = [item for item in multimodal_content if item.get("content_type") == "chart"]
+                
+                # 流式输出图片
+                for image in images:
+                    yield {
+                        "type": "multimodal_content",
+                        "content_type": "image",
+                        "data": self._format_image_for_stream(image)
+                    }
+                    sleep(0.2)  # 图片加载间隔
+                
+                # 流式输出表格
+                for table in tables:
+                    yield {
+                        "type": "multimodal_content", 
+                        "content_type": "table",
+                        "data": self._format_table_for_stream(table)
+                    }
+                    sleep(0.2)  # 表格渲染间隔
+                
+                # 流式输出图表
+                for chart in charts:
+                    yield {
+                        "type": "multimodal_content",
+                        "content_type": "chart", 
+                        "data": self._format_chart_for_stream(chart)
+                    }
+                    sleep(0.2)  # 图表渲染间隔
+            
+            # 生成参考来源
+            references = self._build_references_from_section(top_section, multimodal_content)
             if references:
                 yield {
                     "type": "answer_chunk",
@@ -1776,12 +1781,12 @@ class SearchService:
                     "score": top_section.get("final_score", 0),
                     "title": section_title
                 },
-                "evidence_highlights": top_section.get("evidence_highlights", []),
-                "total_elements": len(enriched_content),
-                "multimodal_elements": {
-                    "tables": len([e for e in enriched_content if e.get("content_type") == "table"]),
-                    "images": len([e for e in enriched_content if e.get("content_type") == "image"]),
-                    "paragraphs": len([e for e in enriched_content if e.get("content_type") == "paragraph"])
+                "evidence_highlights": evidence_highlights,
+                "evidence_count": len(evidence_elements),
+                "multimodal_summary": {
+                    "images": len([item for item in multimodal_content if item.get("content_type") == "image"]),
+                    "tables": len([item for item in multimodal_content if item.get("content_type") == "table"]), 
+                    "charts": len([item for item in multimodal_content if item.get("content_type") == "chart"])
                 },
                 "generation_time": datetime.now().isoformat()
             }
@@ -1790,8 +1795,10 @@ class SearchService:
                 "type": "final_answer",
                 "content": final_answer,
                 "metadata": {
-                    "generation_method": "order_based_rendering",
-                    "has_multimodal": any(e.get("content_type") in ["table", "image"] for e in enriched_content)
+                    "generation_method": "evidence_based_rendering",
+                    "has_multimodal": len(multimodal_content) > 0,
+                    "text_source": "evidence_elements",
+                    "multimodal_source": "mysql_enrichment"
                 }
             }
             
@@ -1810,54 +1817,93 @@ class SearchService:
         
         return "未知章节"
     
+    def _apply_evidence_highlighting_to_content(self, content: str, evidence_highlights: List[Dict], element_id: str) -> str:
+        """对文本内容进行高亮标记"""
+        if not content:
+            return ""
+        
+        # 检查当前元素是否在高亮证据中
+        is_highlighted = any(ev.get("element_id") == element_id for ev in evidence_highlights)
+        
+        if is_highlighted:
+            return f"<mark style='background-color: #fff3cd; padding: 2px 4px; border-radius: 3px;'>{content}</mark>"
+        
+        return content
+    
     def _apply_evidence_highlighting(self, element: Dict, evidence_highlights: List[Dict]) -> str:
         """对证据进行高亮标记"""
         content = element.get("content", "")
         element_id = element.get("element_id", "")
         
-        # 检查当前元素是否在高亮证据中
-        is_highlighted = any(ev.get("element_id") == element_id for ev in evidence_highlights)
-        
-        if is_highlighted and content:
-            return f"<mark style='background-color: #fff3cd; padding: 2px 4px;'>{content}</mark>"
-        
-        return content
+        return self._apply_evidence_highlighting_to_content(content, evidence_highlights, element_id)
     
     def _format_table_for_stream(self, table_element: Dict) -> Dict:
         """格式化表格用于流式输出"""
         table_details = table_element.get("table_details", {})
+        metadata = table_element.get("metadata", {})
         
         return {
             "element_id": table_element.get("element_id", ""),
             "title": table_element.get("title", "数据表"),
-            "content": table_element.get("content", ""),
-            "html": table_details.get("html", ""),
+            "description": table_element.get("content", ""),
+            "html_content": table_details.get("html", ""),
+            "structured_data": table_details.get("data", []),
+            "headers": table_details.get("headers", []),
             "rows": table_details.get("rows", 0),
             "columns": table_details.get("columns", 0),
-            "headers": table_details.get("headers", []),
-            "data": table_details.get("data", []),
             "page_number": table_element.get("page_number", 1),
-            "bbox": table_element.get("bbox", {}),
-            "url": f"/api/file/view/{table_element.get('metadata', {}).get('doc_id')}?page={table_element.get('page_number')}&highlight=table"
+            "bbox": table_element.get("bbox", {})
         }
     
     def _format_image_for_stream(self, image_element: Dict) -> Dict:
         """格式化图片用于流式输出"""
         image_details = image_element.get("image_details", {})
+        metadata = image_element.get("metadata", {})
+        
+        # 构建图片URL
+        image_path = image_details.get("image_path", "")
+        image_url = ""
+        if image_path:
+            if image_path.startswith('http'):
+                image_url = image_path
+            elif image_path.startswith('/'):
+                image_url = image_path
+            elif image_path.startswith('figures/'):
+                # 如果路径已经以figures/开头，直接使用
+                image_url = f"/static/uploads/{image_path}"
+            else:
+                # 其他情况，添加完整前缀
+                image_url = f"/static/uploads/{image_path}"
         
         return {
             "element_id": image_element.get("element_id", ""),
             "title": image_element.get("title", "图片"),
-            "content": image_element.get("content", ""),
+            "description": image_element.get("content", ""),
             "caption": image_details.get("caption", ""),
-            "alt_text": image_details.get("alt_text", ""),
-            "image_path": image_details.get("image_path", ""),
+            "alt_text": image_details.get("alt_text", image_element.get("content", "")),
+            "image_path": image_path,
+            "image_url": image_url,
+            "url": image_url,  # 兼容字段
             "width": image_details.get("width", 0),
             "height": image_details.get("height", 0),
             "format": image_details.get("format", ""),
             "page_number": image_element.get("page_number", 1),
-            "bbox": image_element.get("bbox", {}),
-            "url": f"/api/file/view/{image_element.get('metadata', {}).get('doc_id')}?page={image_element.get('page_number')}&highlight=image"
+            "bbox": image_element.get("bbox", {})
+        }
+    
+    def _format_chart_for_stream(self, chart_element: Dict) -> Dict:
+        """格式化图表用于流式输出"""
+        chart_details = chart_element.get("chart_details", {})
+        metadata = chart_element.get("metadata", {})
+        
+        return {
+            "element_id": chart_element.get("element_id", ""),
+            "title": chart_element.get("title", "图表"),
+            "description": chart_element.get("content", ""),
+            "chart_type": chart_details.get("chart_type", ""),
+            "data_source": chart_details.get("data_source", ""),
+            "page_number": chart_element.get("page_number", 1),
+            "bbox": chart_element.get("bbox", {})
         }
     
     def _build_references_from_content(self, content: List[Dict], evidence_highlights: List[Dict]) -> str:
@@ -1890,3 +1936,242 @@ class SearchService:
             references.append(ref)
         
         return "\n".join(references)
+    
+    def _format_image_for_frontend(self, image_element: Dict) -> Dict:
+        """格式化图片数据供前端渲染"""
+        image_details = image_element.get("image_details", {})
+        metadata = image_element.get("metadata", {})
+        
+        return {
+            "element_id": image_element.get("element_id", ""),
+            "title": image_element.get("title", "图片"),
+            "description": image_element.get("content", ""),
+            "caption": image_details.get("caption", ""),
+            "alt_text": image_details.get("alt_text", image_element.get("content", "")),
+            "image_path": image_details.get("image_path", ""),
+            "page_number": image_element.get("page_number", 1),
+            "bbox": image_element.get("bbox", {}),
+            "doc_id": metadata.get("doc_id", ""),
+            "section_id": metadata.get("section_id", ""),
+            # 前端渲染所需的URL和样式信息
+            "display_url": self._build_image_display_url(image_details, metadata),
+            "thumbnail_url": self._build_image_thumbnail_url(image_details, metadata),
+            "view_original_url": f"/api/file/view/{metadata.get('doc_id')}?page={image_element.get('page_number')}&highlight=image",
+            "render_config": {
+                "max_width": "100%",
+                "max_height": "400px", 
+                "border_radius": "8px",
+                "box_shadow": "0 2px 8px rgba(0,0,0,0.1)"
+            }
+        }
+    
+    def _format_table_for_frontend(self, table_element: Dict) -> Dict:
+        """格式化表格数据供前端渲染"""
+        table_details = table_element.get("table_details", {})
+        metadata = table_element.get("metadata", {})
+        
+        # 深度分析表格结构
+        table_data = table_details.get("data", [])
+        table_html = table_details.get("html", "")
+        
+        # 构建前端可直接渲染的表格结构
+        formatted_table = {
+            "element_id": table_element.get("element_id", ""),
+            "title": table_element.get("title", "数据表"),
+            "description": table_element.get("content", ""),
+            "rows": table_details.get("rows", 0),
+            "columns": table_details.get("columns", 0),
+            "page_number": table_element.get("page_number", 1),
+            "bbox": table_element.get("bbox", {}),
+            "doc_id": metadata.get("doc_id", ""),
+            "section_id": metadata.get("section_id", ""),
+            
+            # 前端渲染的核心数据
+            "html_content": table_html,
+            "structured_data": self._parse_table_data_for_frontend(table_data),
+            "headers": self._extract_table_headers(table_data, table_html),
+            
+            # 前端渲染配置
+            "render_config": {
+                "enable_sorting": True,
+                "enable_search": len(table_data) > 10,
+                "pagination": len(table_data) > 20,
+                "page_size": 20,
+                "responsive": True,
+                "striped_rows": True,
+                "bordered": True,
+                "hover_effect": True,
+                "css_classes": ["table", "table-striped", "table-bordered", "table-hover"]
+            },
+            
+            # 操作链接
+            "view_original_url": f"/api/file/view/{metadata.get('doc_id')}?page={table_element.get('page_number')}&highlight=table",
+            "export_csv_url": f"/api/table/export/{table_element.get('element_id')}/csv",
+            "export_excel_url": f"/api/table/export/{table_element.get('element_id')}/excel"
+        }
+        
+        return formatted_table
+    
+    def _format_chart_for_frontend(self, chart_element: Dict) -> Dict:
+        """格式化图表数据供前端渲染"""
+        chart_details = chart_element.get("chart_details", {})
+        metadata = chart_element.get("metadata", {})
+        
+        return {
+            "element_id": chart_element.get("element_id", ""),
+            "title": chart_element.get("title", "图表"),
+            "description": chart_element.get("content", ""),
+            "chart_type": chart_details.get("chart_type", "unknown"),
+            "page_number": chart_element.get("page_number", 1),
+            "bbox": chart_element.get("bbox", {}),
+            "doc_id": metadata.get("doc_id", ""),
+            "section_id": metadata.get("section_id", ""),
+            
+            # 图表数据和配置
+            "chart_data": chart_details.get("data", {}),
+            "chart_config": chart_details.get("config", {}),
+            "image_url": chart_details.get("image_path", ""),
+            
+            # 前端渲染配置
+            "render_config": {
+                "width": "100%",
+                "height": "300px",
+                "responsive": True,
+                "interactive": True,
+                "theme": "light"
+            },
+            
+            # 操作链接
+            "view_original_url": f"/api/file/view/{metadata.get('doc_id')}?page={chart_element.get('page_number')}&highlight=chart",
+            "download_image_url": f"/api/chart/download/{chart_element.get('element_id')}/png"
+        }
+    
+    def _build_references_from_section(self, top_section: Dict, multimodal_content: List[Dict]) -> str:
+        """从section和多模态内容构建参考来源"""
+        references = []
+        doc_info = {}
+        
+        # 从top_section收集信息
+        section_doc_id = top_section.get("doc_id", "")
+        section_title = top_section.get("title", "")
+        
+        if section_doc_id:
+            doc_info[section_doc_id] = {
+                "title": section_title,
+                "page_numbers": set(),
+                "elements": []
+            }
+            
+            # 从evidence_elements收集页码
+            for evidence in top_section.get("evidence_elements", []):
+                if evidence.get("page_number"):
+                    doc_info[section_doc_id]["page_numbers"].add(evidence.get("page_number"))
+        
+        # 从多模态内容收集信息
+        for item in multimodal_content:
+            metadata = item.get("metadata", {})
+            doc_id = metadata.get("doc_id", "")
+            
+            if doc_id and doc_id not in doc_info:
+                doc_info[doc_id] = {
+                    "title": item.get("title", ""),
+                    "page_numbers": set(),
+                    "elements": []
+                }
+            
+            if doc_id and item.get("page_number"):
+                doc_info[doc_id]["page_numbers"].add(item.get("page_number"))
+                doc_info[doc_id]["elements"].append({
+                    "type": item.get("content_type", ""),
+                    "title": item.get("title", "")
+                })
+        
+        # 生成引用格式
+        for i, (doc_id, info) in enumerate(doc_info.items(), 1):
+            pages = sorted(list(info["page_numbers"]))
+            page_text = f"第{', '.join(map(str, pages))}页" if pages else ""
+            
+            elements_text = ""
+            if info["elements"]:
+                element_types = {}
+                for elem in info["elements"]:
+                    elem_type = elem["type"]
+                    if elem_type not in element_types:
+                        element_types[elem_type] = 0
+                    element_types[elem_type] += 1
+                
+                type_texts = []
+                for elem_type, count in element_types.items():
+                    type_name = {"image": "图片", "table": "表格", "chart": "图表"}.get(elem_type, elem_type)
+                    type_texts.append(f"{count}个{type_name}")
+                
+                if type_texts:
+                    elements_text = f" (包含{', '.join(type_texts)})"
+            
+            ref = f"[{i}] {info['title']} {page_text}{elements_text}"
+            references.append(ref)
+        
+        return "\n".join(references)
+    
+    def _build_image_display_url(self, image_details: Dict, metadata: Dict) -> str:
+        """构建图片显示URL"""
+        image_path = image_details.get("image_path", "")
+        if image_path:
+            # 如果有直接的图片路径，使用静态文件服务
+            return f"/api/static/images/{image_path}"
+        else:
+            # 否则使用PDF页面截图
+            doc_id = metadata.get("doc_id", "")
+            page_no = image_details.get("page", 1)
+            return f"/api/file/view/{doc_id}?page={page_no}&format=image"
+    
+    def _build_image_thumbnail_url(self, image_details: Dict, metadata: Dict) -> str:
+        """构建图片缩略图URL"""
+        display_url = self._build_image_display_url(image_details, metadata)
+        return f"{display_url}&thumbnail=true&size=200x150"
+    
+    def _parse_table_data_for_frontend(self, table_data: List[Dict]) -> List[List[str]]:
+        """解析表格数据为前端可渲染的二维数组"""
+        if not table_data:
+            return []
+        
+        parsed_data = []
+        for row in table_data:
+            if isinstance(row, dict):
+                # 如果是字典格式，提取row_text或row_json
+                row_text = row.get("row_text", "")
+                if row_text:
+                    # 简单分割，实际可能需要更复杂的解析
+                    cells = [cell.strip() for cell in row_text.split("|") if cell.strip()]
+                    parsed_data.append(cells)
+            elif isinstance(row, list):
+                # 如果已经是列表格式
+                parsed_data.append([str(cell) for cell in row])
+            elif isinstance(row, str):
+                # 如果是字符串，尝试分割
+                cells = [cell.strip() for cell in row.split("|") if cell.strip()]
+                parsed_data.append(cells)
+        
+        return parsed_data
+    
+    def _extract_table_headers(self, table_data: List[Dict], table_html: str) -> List[str]:
+        """提取表格标题行"""
+        if table_data and len(table_data) > 0:
+            first_row = table_data[0]
+            if isinstance(first_row, dict):
+                row_text = first_row.get("row_text", "")
+                if row_text:
+                    return [cell.strip() for cell in row_text.split("|") if cell.strip()]
+            elif isinstance(first_row, list):
+                return [str(cell) for cell in first_row]
+        
+        # 如果无法从数据中提取，尝试从HTML中提取
+        if table_html:
+            # 简单的HTML解析，实际可能需要更复杂的处理
+            import re
+            th_pattern = r'<th[^>]*>(.*?)</th>'
+            headers = re.findall(th_pattern, table_html, re.IGNORECASE | re.DOTALL)
+            if headers:
+                return [re.sub(r'<[^>]+>', '', header).strip() for header in headers]
+        
+        return []

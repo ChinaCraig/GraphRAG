@@ -1763,6 +1763,11 @@ body {
 /* 多模态内容渲染样式 */
 /* ============================= */
 
+/* 文本内容容器 */
+.text-content {
+    margin-bottom: var(--spacing-md);
+}
+
 /* 多模态内容容器 */
 .multimodal-content {
     margin-top: var(--spacing-md);
