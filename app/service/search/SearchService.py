@@ -1024,7 +1024,7 @@ class SearchService:
                 # 收集证据元素
                 evidence = {
                     "element_id": result.get("element_id", ""),
-                    "content": result.get("content", "")[:150] + "..." if result.get("content", "") else "",
+                    "content": result.get("content", ""),
                     "score": score,
                     "source": source,
                     "highlight": result.get("highlight", {}),
@@ -1826,7 +1826,7 @@ class SearchService:
         is_highlighted = any(ev.get("element_id") == element_id for ev in evidence_highlights)
         
         if is_highlighted:
-            return f"<mark style='background-color: #fff3cd; padding: 2px 4px; border-radius: 3px;'>{content}</mark>"
+            return f"<mark style='padding: 2px 4px; border-radius: 3px;'>{content}</mark>"
         
         return content
     
@@ -1921,6 +1921,7 @@ class SearchService:
                 doc_info[doc_id] = {
                     "section_id": section_id,
                     "title": element.get("title", ""),
+                    "doc_name": self._get_document_name_by_id(doc_id),
                     "page_numbers": set()
                 }
             
@@ -1932,7 +1933,15 @@ class SearchService:
             pages = sorted(list(info["page_numbers"]))
             page_text = f"第{', '.join(map(str, pages))}页" if pages else ""
             
-            ref = f"[{i}] {info['title']} ({page_text})"
+            # 构建引用格式：[序号] 文档名 - 章节标题 (页码信息)
+            doc_name = info.get('doc_name', '未知文档')
+            title = info.get('title', '')
+            
+            if title and title != doc_name:
+                ref = f"[{i}] {doc_name} - {title} ({page_text})"
+            else:
+                ref = f"[{i}] {doc_name} ({page_text})"
+            
             references.append(ref)
         
         return "\n".join(references)
@@ -2046,6 +2055,51 @@ class SearchService:
             "download_image_url": f"/api/chart/download/{chart_element.get('element_id')}/png"
         }
     
+    def _get_document_name_by_id(self, doc_id: str) -> str:
+        """根据doc_id获取文档名称"""
+        try:
+            logger.info(f"🔍 获取文档名称 - 输入doc_id: {repr(doc_id)} (类型: {type(doc_id)})")
+            
+            if not doc_id:
+                logger.warning("❌ doc_id为空，返回默认值")
+                return "未知文档"
+                
+            # 尝试转换为整数ID
+            try:
+                doc_id_int = int(doc_id)
+                logger.info(f"✅ doc_id转换为整数: {doc_id_int}")
+            except (ValueError, TypeError):
+                # 如果不是数字，可能是字符串ID，直接使用
+                doc_id_int = doc_id
+                logger.info(f"⚠️ doc_id保持为字符串: {doc_id_int}")
+            
+            # 查询数据库获取文档名称
+            query = "SELECT filename FROM documents WHERE id = :doc_id"
+            logger.info(f"🔍 执行查询: {query} (参数: {doc_id_int})")
+            
+            result = self.mysql_client.execute_query(query, {'doc_id': doc_id_int})
+            logger.info(f"📊 查询结果: {result}")
+            
+            if result and len(result) > 0:
+                filename = result[0].get('filename', '')
+                logger.info(f"📁 获取到filename: {filename}")
+                
+                if filename:
+                    # 去掉文件扩展名，只保留文档名
+                    import os
+                    doc_name = os.path.splitext(filename)[0]
+                    logger.info(f"✅ 处理后的文档名: {doc_name}")
+                    return doc_name
+            
+            fallback_name = f"文档{doc_id}"
+            logger.warning(f"⚠️ 未找到文档，返回默认名称: {fallback_name}")
+            return fallback_name
+            
+        except Exception as e:
+            error_msg = f"获取文档名称失败 (doc_id: {doc_id}): {str(e)}"
+            logger.error(error_msg)
+            return f"文档{doc_id}"
+    
     def _build_references_from_section(self, top_section: Dict, multimodal_content: List[Dict]) -> str:
         """从section和多模态内容构建参考来源"""
         references = []
@@ -2058,6 +2112,7 @@ class SearchService:
         if section_doc_id:
             doc_info[section_doc_id] = {
                 "title": section_title,
+                "doc_name": self._get_document_name_by_id(section_doc_id),
                 "page_numbers": set(),
                 "elements": []
             }
@@ -2075,6 +2130,7 @@ class SearchService:
             if doc_id and doc_id not in doc_info:
                 doc_info[doc_id] = {
                     "title": item.get("title", ""),
+                    "doc_name": self._get_document_name_by_id(doc_id),
                     "page_numbers": set(),
                     "elements": []
                 }
@@ -2108,7 +2164,15 @@ class SearchService:
                 if type_texts:
                     elements_text = f" (包含{', '.join(type_texts)})"
             
-            ref = f"[{i}] {info['title']} {page_text}{elements_text}"
+            # 构建引用格式：[序号] 文档名 - 章节标题 页码信息 (多模态内容)
+            doc_name = info.get('doc_name', '未知文档')
+            title = info.get('title', '')
+            
+            if title and title != doc_name:
+                ref = f"[{i}] {doc_name} - {title} {page_text}{elements_text}"
+            else:
+                ref = f"[{i}] {doc_name} {page_text}{elements_text}"
+            
             references.append(ref)
         
         return "\n".join(references)
